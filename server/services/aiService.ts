@@ -141,16 +141,15 @@ export interface InterviewBatchEvaluationResult {
 const scoreSchema = z.number().int().min(0).max(100)
 const textArraySchema = z.array(z.string())
 // Flexible array: accepts strings and objects, coerces objects to string
-const flexibleTextArraySchema = z.array(
-  z.union([
-    z.string(),
-    z.record(z.unknown()).transform((obj) => {
-      // Convert object to a readable string, e.g. {degree: "B.Tech", field: "CSE"} → "B.Tech, CSE"
-      const values = Object.values(obj).filter((v) => typeof v === 'string' && v.trim())
-      return values.length > 0 ? values.join(', ') : JSON.stringify(obj)
-    }),
-  ])
-).default([])
+const coerceToString = (val: unknown): string => {
+  if (typeof val === 'string') return val
+  if (val && typeof val === 'object') {
+    const values = Object.values(val).filter((v) => typeof v === 'string' && (v as string).trim())
+    return values.length > 0 ? values.join(', ') : JSON.stringify(val)
+  }
+  return String(val ?? '')
+}
+const flexibleTextArraySchema = z.array(z.any().transform(coerceToString)).default([])
 
 export const ResumeAnalysisResultSchema = z.object({
   overallScore: scoreSchema,
@@ -160,16 +159,17 @@ export const ResumeAnalysisResultSchema = z.object({
   detectedSkills: flexibleTextArraySchema,
   strengths: flexibleTextArraySchema,
   improvements: flexibleTextArraySchema,
-  projects: z.array(
-    z.union([
-      z.object({ title: z.string(), outcome: z.string() }),
-      z.string().transform((s) => ({ title: s, outcome: '' })),
-      z.record(z.unknown()).transform((obj) => ({
+  projects: z.array(z.any().transform((val: unknown) => {
+    if (typeof val === 'string') return { title: val, outcome: '' }
+    if (val && typeof val === 'object') {
+      const obj = val as Record<string, unknown>
+      return {
         title: typeof obj.title === 'string' ? obj.title : typeof obj.name === 'string' ? obj.name : JSON.stringify(obj),
         outcome: typeof obj.outcome === 'string' ? obj.outcome : typeof obj.description === 'string' ? obj.description : '',
-      })),
-    ])
-  ).default([]),
+      }
+    }
+    return { title: String(val ?? ''), outcome: '' }
+  })).default([]),
   educationExperience: flexibleTextArraySchema,
   certifications: flexibleTextArraySchema,
   missingSkills: flexibleTextArraySchema,
@@ -1032,13 +1032,7 @@ const careerAnalysisSchema = z.object({
   interview_preparation: z.array(z.object({ topic: z.string().min(1), questions: z.array(z.string()) })),
 })
 
-const normalizeCareerAnalysisResponse = (response: string, provider: AIProviderName) => {
-  try {
-    return JSON.stringify(careerAnalysisSchema.parse(parseJsonResponse(response)))
-  } catch (error) {
-    throw new AIProviderError('The AI provider returned an invalid career analysis.', 'PROVIDER_FAILED', provider, false, { cause: error })
-  }
-}
+
 
 export const aiService = {
   async chat(message: string, context: unknown, page: string | null): Promise<string> {

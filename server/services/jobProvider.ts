@@ -402,7 +402,7 @@ export class JSearchJobProvider implements JobProvider {
           location: [text(item.job_city), text(item.job_state), text(item.job_country)].filter(Boolean).join(', ') || 'Location not listed',
           remote: item.job_is_remote === true,
           employmentType: text(item.job_employment_type) || 'Full-time',
-          experienceLevel: text(item.job_required_experience?.required_experience_in_months) ? `${Math.round(Number(item.job_required_experience.required_experience_in_months) / 12)} years` : 'Not listed',
+          experienceLevel: (() => { const exp = item.job_required_experience as Record<string, unknown> | null | undefined; const months = exp?.required_experience_in_months; return typeof months === 'number' ? `${Math.round(months / 12)} years` : 'Not listed' })(),
           salary: item.job_min_salary || item.job_max_salary ? `${item.job_min_salary ?? ''}–${item.job_max_salary ?? ''} ${text(item.job_salary_currency)}`.trim() : undefined,
           description: text(item.job_description).slice(0, 1200),
           skills: listValue(item.job_required_skills),
