@@ -1022,16 +1022,6 @@ const normalizeChatResponse = (response: string, provider: AIProviderName) => {
   }
 }
 
-const careerAnalysisSchema = z.object({
-  career_summary: z.string().min(1),
-  strengths: z.array(z.object({ skill: z.string().min(1), reason: z.string() })),
-  skill_gaps: z.array(z.object({ skill: z.string().min(1), current_level: scoreSchema, target_level: scoreSchema, priority: z.enum(['High', 'Medium', 'Low']), reason: z.string() })),
-  recommended_skills: z.array(z.object({ skill: z.string().min(1), reason: z.string() })),
-  learning_strategy: z.array(z.object({ step: z.number().int().positive(), title: z.string().min(1), description: z.string() })),
-  recommended_roles: z.array(z.object({ role: z.string().min(1), match_percentage: scoreSchema, reason: z.string() })),
-  interview_preparation: z.array(z.object({ topic: z.string().min(1), questions: z.array(z.string()) })),
-})
-
 
 
 export const aiService = {
