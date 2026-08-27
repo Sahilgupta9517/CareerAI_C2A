@@ -71,7 +71,7 @@ export interface InterviewQuestionGenerationResult {
   providerStatus: AIProviderStatus
   fallbackUsed: boolean
 }
-export type AIProviderName = 'gemini' | 'groq' | 'huggingface' | 'openai' | 'openrouter' | 'local'
+export type AIProviderName = 'gemini' | 'groq' | 'huggingface' | 'openai' | 'openrouter' | 'mistral' | 'sambanova' | 'cohere' | 'cloudflare' | 'cerebras' | 'local'
 
 export type AIProviderStatus = 'available' | 'rate_limited' | 'temporarily_unavailable' | 'failed' | 'local_fallback'
 
@@ -296,8 +296,39 @@ export const parseJsonResponse = (value: string): unknown => {
   } catch {
     const start = candidate.indexOf('{')
     const end = candidate.lastIndexOf('}')
-    if (start < 0 || end <= start) throw new Error('AI returned malformed JSON.')
-    return JSON.parse(candidate.slice(start, end + 1))
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(candidate.slice(start, end + 1))
+      } catch { /* fall through to truncation repair */ }
+    }
+    // Attempt to repair truncated JSON (AI hit token limit)
+    if (start >= 0) {
+      let fragment = candidate.slice(start)
+      // Remove trailing incomplete string/value tokens
+      fragment = fragment.replace(/,\s*"[^"]*$/, '').replace(/,\s*$/, '')
+      // Close any open brackets and braces
+      const opens = { '{': 0, '[': 0 }
+      let inString = false
+      let escape = false
+      for (const ch of fragment) {
+        if (escape) { escape = false; continue }
+        if (ch === '\\' && inString) { escape = true; continue }
+        if (ch === '"') { inString = !inString; continue }
+        if (inString) continue
+        if (ch === '{') opens['{']++
+        else if (ch === '}') opens['{']--
+        else if (ch === '[') opens['[']++
+        else if (ch === ']') opens['[']--
+      }
+      // Remove trailing comma before closing
+      fragment = fragment.replace(/,\s*$/, '')
+      for (let i = 0; i < opens['[']; i++) fragment += ']'
+      for (let i = 0; i < opens['{']; i++) fragment += '}'
+      try {
+        return JSON.parse(fragment)
+      } catch { /* give up */ }
+    }
+    throw new Error('AI returned malformed JSON.')
   }
 }
 
@@ -379,7 +410,7 @@ export const normalizeSkillGapAnalysisResponse = (value: unknown): SkillGapAnaly
 }
 
 async function callOpenAI(apiKey: string, systemPrompt: string, userPrompt: string, model = process.env.AI_FALLBACK_MODEL || process.env.AI_MODEL || 'gpt-4o-mini'): Promise<string> {
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -389,18 +420,18 @@ async function callOpenAI(apiKey: string, systemPrompt: string, userPrompt: stri
       model,
       temperature: 0.2,
       response_format: { type: 'json_object' },
-      max_tokens: 1800,
+      max_tokens: 4096,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
     }),
-  })
+  }, Math.max(1000, Number(process.env.AI_TIMEOUT_MS || 30000)))
 
   if (!response.ok) {
     const errorText = await response.text()
     const lower = errorText.toLowerCase()
-    if (response.status === 429 || lower.includes('quota') || lower.includes('rate limit') || lower.includes('resource_exhausted')) {
+    if (response.status === 429 || lower.includes('quota') || lower.includes('rate limit') || lower.includes('resource_exhausted') || lower.includes('too many requests')) {
       throw new AIProviderError('The OpenAI provider is rate limited.', 'QUOTA_EXHAUSTED', 'openai', true)
     }
     if ([500, 502, 503, 504].includes(response.status)) {
@@ -418,8 +449,8 @@ async function callOpenAI(apiKey: string, systemPrompt: string, userPrompt: stri
   return content
 }
 
-async function callCompatibleProvider(apiKey: string, systemPrompt: string, userPrompt: string, provider: 'groq' | 'huggingface', endpoint: string, model: string): Promise<string> {
-  const response = await fetch(endpoint, {
+async function callCompatibleProvider(apiKey: string, systemPrompt: string, userPrompt: string, provider: AIProviderName, endpoint: string, model: string): Promise<string> {
+  const response = await fetchWithTimeout(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -429,13 +460,13 @@ async function callCompatibleProvider(apiKey: string, systemPrompt: string, user
       model,
       temperature: 0.2,
       response_format: { type: 'json_object' },
-      max_tokens: 1800,
+      max_tokens: 4096,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
     }),
-  })
+  }, Math.max(1000, Number(process.env.AI_TIMEOUT_MS || 30000)))
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -455,6 +486,66 @@ async function callCompatibleProvider(apiKey: string, systemPrompt: string, user
 const callGroq = (apiKey: string, systemPrompt: string, userPrompt: string) => callCompatibleProvider(apiKey, systemPrompt, userPrompt, 'groq', 'https://api.groq.com/openai/v1/chat/completions', process.env.GROQ_MODEL || 'llama-3.1-8b-instant')
 const callHuggingFace = (apiKey: string, systemPrompt: string, userPrompt: string) => callCompatibleProvider(apiKey, systemPrompt, userPrompt, 'huggingface', 'https://router.huggingface.co/v1/chat/completions', process.env.HUGGINGFACE_MODEL || 'meta-llama/Llama-3.1-8B-Instruct')
 
+// --- Mistral AI (OpenAI-compatible) ---
+const callMistral = (apiKey: string, systemPrompt: string, userPrompt: string) => callCompatibleProvider(apiKey, systemPrompt, userPrompt, 'mistral', 'https://api.mistral.ai/v1/chat/completions', process.env.MISTRAL_MODEL || 'mistral-small-latest')
+
+// --- SambaNova Cloud (OpenAI-compatible) ---
+const callSambaNova = (apiKey: string, systemPrompt: string, userPrompt: string) => callCompatibleProvider(apiKey, systemPrompt, userPrompt, 'sambanova', 'https://api.sambanova.ai/v1/chat/completions', process.env.SAMBANOVA_MODEL || 'Meta-Llama-3.1-8B-Instruct')
+
+// --- Cerebras (OpenAI-compatible) ---
+const callCerebras = (apiKey: string, systemPrompt: string, userPrompt: string) => callCompatibleProvider(apiKey, systemPrompt, userPrompt, 'cerebras', 'https://api.cerebras.ai/v1/chat/completions', process.env.CEREBRAS_MODEL || 'llama3.1-8b')
+
+// --- Cohere v2 Chat API (custom format, not OpenAI-compatible) ---
+async function callCohere(apiKey: string, systemPrompt: string, userPrompt: string): Promise<string> {
+  const model = process.env.COHERE_MODEL || 'command-r'
+  const response = await fetchWithTimeout('https://api.cohere.com/v2/chat', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
+  }, Math.max(1000, Number(process.env.AI_TIMEOUT_MS || 30000)))
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    const lower = errorText.toLowerCase()
+    if (response.status === 429 || lower.includes('quota') || lower.includes('rate limit')) throw new AIProviderError('The cohere provider is rate limited.', 'QUOTA_EXHAUSTED', 'cohere', false)
+    if ([500, 502, 503, 504].includes(response.status)) throw new AIProviderError('The cohere provider is temporarily unavailable.', 'TEMPORARY_UNAVAILABLE', 'cohere', true)
+    if (response.status === 401 || response.status === 403) throw new AIProviderError('Cohere authentication failed.', 'AUTHENTICATION_FAILED', 'cohere', false)
+    throw new AIProviderError('The cohere provider request failed.', 'PROVIDER_FAILED', 'cohere', false)
+  }
+
+  const data: unknown = await response.json()
+  if (!isRecord(data)) throw new AIProviderError('Cohere returned an invalid response.', 'PROVIDER_FAILED', 'cohere', false)
+  // Cohere v2 response: { message: { content: [{ type: 'text', text: '...' }] } }
+  const message = isRecord(data.message) ? data.message : null
+  const contentParts = message && Array.isArray(message.content) ? message.content : []
+  const textPart = contentParts.find((part: unknown) => isRecord(part) && part.type === 'text')
+  const content = isRecord(textPart) && typeof textPart.text === 'string' ? textPart.text : ''
+  if (!content.trim()) throw new AIProviderError('Cohere returned an empty response.', 'PROVIDER_FAILED', 'cohere', false)
+  return content.trim()
+}
+
+// --- Cloudflare Workers AI (OpenAI-compatible with account ID in URL) ---
+async function callCloudflare(apiKey: string, systemPrompt: string, userPrompt: string): Promise<string> {
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID || ''
+  if (!accountId || accountId === 'your_cloudflare_account_id_here') {
+    throw new AIProviderError('Cloudflare account ID is not configured.', 'AUTHENTICATION_FAILED', 'cloudflare', false)
+  }
+  const model = process.env.CLOUDFLARE_MODEL || '@cf/meta/llama-3.1-8b-instruct'
+  const endpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1/chat/completions`
+  return callCompatibleProvider(apiKey, systemPrompt, userPrompt, 'cloudflare', endpoint, model)
+}
+
 async function callGemini(
   apiKey: string,
   systemPrompt: string,
@@ -465,7 +556,7 @@ async function callGemini(
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: 'POST',
 
     headers: {
@@ -495,17 +586,17 @@ async function callGemini(
 
       generationConfig: {
         responseMimeType: 'application/json',
-        maxOutputTokens: 1800,
+        maxOutputTokens: 4096,
       },
     }),
-  })
+  }, Math.max(1000, Number(process.env.AI_TIMEOUT_MS || 30000)))
 
   if (!response.ok) {
     const errorText =
       await response.text()
 
     const lowerError = errorText.toLowerCase()
-    if (response.status === 429 || lowerError.includes('quota') || lowerError.includes('resource_exhausted') || lowerError.includes('rate limit')) throw new AIProviderError('The Gemini provider is rate limited.', 'QUOTA_EXHAUSTED', 'gemini', true)
+    if (response.status === 429 || lowerError.includes('quota') || lowerError.includes('resource_exhausted') || lowerError.includes('rate limit') || lowerError.includes('too many requests')) throw new AIProviderError('The Gemini provider is rate limited.', 'QUOTA_EXHAUSTED', 'gemini', true)
     if (response.status === 401 || response.status === 403) throw new AIProviderError('Gemini authentication failed.', 'AUTHENTICATION_FAILED', 'gemini', false)
     if ([500, 502, 503, 504].includes(response.status)) throw new AIProviderError('The Gemini provider is temporarily unavailable.', 'TEMPORARY_UNAVAILABLE', 'gemini', true)
     throw new AIProviderError('The Gemini provider request failed.', 'PROVIDER_FAILED', 'gemini', false)
@@ -534,6 +625,16 @@ async function callGemini(
 
 const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
 
+const fetchWithTimeout = async (input: string | URL, init: RequestInit, milliseconds: number) => {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), milliseconds)
+  try {
+    return await fetch(input, { ...init, signal: controller.signal })
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 const withTimeout = async <T>(operation: Promise<T>, milliseconds: number): Promise<T> => {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
@@ -551,7 +652,7 @@ const withTimeout = async <T>(operation: Promise<T>, milliseconds: number): Prom
 const callWithRetry = async (providerCall: () => Promise<string>): Promise<string> => {
   let lastError: unknown
   const maxAttempts = Math.max(1, Number(process.env.AI_MAX_RETRIES || 1) + 1)
-  const timeoutMs = Math.max(1000, Number(process.env.AI_TIMEOUT_MS || process.env.AI_REQUEST_TIMEOUT_MS || 18000))
+  const timeoutMs = Math.max(1000, Number(process.env.AI_TIMEOUT_MS || process.env.AI_REQUEST_TIMEOUT_MS || 30000))
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       return await withTimeout(providerCall(), timeoutMs)
@@ -620,6 +721,12 @@ async function callOpenRouter(
   }
   const lowerError = errorText.toLowerCase()
 
+  if (response.status === 429) {
+    const retryAfterSeconds = Number(response.headers.get('retry-after'))
+    const retryDelay = Number.isFinite(retryAfterSeconds) ? Math.min(2000, Math.max(0, retryAfterSeconds * 1000)) : 500
+    if (retryDelay > 0) await wait(retryDelay)
+  }
+
   console.error('[OpenRouter] HTTP error:', {
     status: response.status,
     statusText: response.statusText,
@@ -677,6 +784,7 @@ async function callOpenRouter(
 async function callAI(
   systemPrompt: string,
   userPrompt: string,
+  normalizeResponse?: (response: string, provider: AIProviderName) => string,
 ): Promise<string> {
   const configuredProvider = (process.env.AI_PROVIDER || 'gemini').toLowerCase()
   const providerOrder = (process.env.AI_PROVIDER_ORDER || configuredProvider)
@@ -690,17 +798,29 @@ async function callAI(
     call: () => Promise<string>
   }> = []
 
-  const geminiKey = process.env.AI_API_KEY || ''
+  const geminiKey = process.env.GEMINI_API_KEY || process.env.AI_API_KEY || ''
   const groqKey = process.env.GROQ_API_KEY || ''
   const huggingFaceKey = process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN || ''
   const openRouterKey = process.env.OPENROUTER_API_KEY || ''
-
   const openAIKey = process.env.OPENAI_API_KEY || ''
-  const addGemini = () => geminiKey && geminiKey !== 'your_key_here' && providers.push({ name: 'gemini', key: geminiKey, call: () => callGemini(geminiKey, systemPrompt, userPrompt) })
-  const addGroq = () => groqKey && groqKey !== 'your_key_here' && providers.push({ name: 'groq', key: groqKey, call: () => callGroq(groqKey, systemPrompt, userPrompt) })
-  const addHuggingFace = () => huggingFaceKey && huggingFaceKey !== 'your_key_here' && providers.push({ name: 'huggingface', key: huggingFaceKey, call: () => callHuggingFace(huggingFaceKey, systemPrompt, userPrompt) })
-  const addOpenAI = () => openAIKey && openAIKey !== 'your_key_here' && providers.push({ name: 'openai', key: openAIKey, call: () => callOpenAI(openAIKey, systemPrompt, userPrompt) })
-  const addOpenRouter = () => openRouterKey && openRouterKey !== 'your_key_here' && providers.push({ name: 'openrouter', key: openRouterKey, call: () => callOpenRouter(openRouterKey, systemPrompt, userPrompt) })
+  const mistralKey = process.env.MISTRAL_API_KEY || ''
+  const sambanovaKey = process.env.SAMBANOVA_API_KEY || ''
+  const cohereKey = process.env.COHERE_API_KEY || ''
+  const cloudflareKey = process.env.CLOUDFLARE_API_KEY || ''
+  const cerebrasKey = process.env.CEREBRAS_API_KEY || ''
+
+  const isValidKey = (key: string) => key && !key.startsWith('your_') && key !== 'your_key_here'
+
+  const addGemini = () => isValidKey(geminiKey) && providers.push({ name: 'gemini', key: geminiKey, call: () => callGemini(geminiKey, systemPrompt, userPrompt) })
+  const addGroq = () => isValidKey(groqKey) && providers.push({ name: 'groq', key: groqKey, call: () => callGroq(groqKey, systemPrompt, userPrompt) })
+  const addHuggingFace = () => isValidKey(huggingFaceKey) && providers.push({ name: 'huggingface', key: huggingFaceKey, call: () => callHuggingFace(huggingFaceKey, systemPrompt, userPrompt) })
+  const addOpenAI = () => isValidKey(openAIKey) && providers.push({ name: 'openai', key: openAIKey, call: () => callOpenAI(openAIKey, systemPrompt, userPrompt) })
+  const addOpenRouter = () => isValidKey(openRouterKey) && providers.push({ name: 'openrouter', key: openRouterKey, call: () => callOpenRouter(openRouterKey, systemPrompt, userPrompt) })
+  const addMistral = () => isValidKey(mistralKey) && providers.push({ name: 'mistral', key: mistralKey, call: () => callMistral(mistralKey, systemPrompt, userPrompt) })
+  const addSambaNova = () => isValidKey(sambanovaKey) && providers.push({ name: 'sambanova', key: sambanovaKey, call: () => callSambaNova(sambanovaKey, systemPrompt, userPrompt) })
+  const addCohere = () => isValidKey(cohereKey) && providers.push({ name: 'cohere', key: cohereKey, call: () => callCohere(cohereKey, systemPrompt, userPrompt) })
+  const addCloudflare = () => isValidKey(cloudflareKey) && providers.push({ name: 'cloudflare', key: cloudflareKey, call: () => callCloudflare(cloudflareKey, systemPrompt, userPrompt) })
+  const addCerebras = () => isValidKey(cerebrasKey) && providers.push({ name: 'cerebras', key: cerebrasKey, call: () => callCerebras(cerebrasKey, systemPrompt, userPrompt) })
 
   for (const provider of providerOrder) {
     if (provider === 'gemini') addGemini()
@@ -708,6 +828,11 @@ async function callAI(
     if (provider === 'huggingface' || provider === 'hf') addHuggingFace()
     if (provider === 'openrouter') addOpenRouter()
     if (provider === 'openai') addOpenAI()
+    if (provider === 'mistral') addMistral()
+    if (provider === 'sambanova') addSambaNova()
+    if (provider === 'cohere') addCohere()
+    if (provider === 'cloudflare') addCloudflare()
+    if (provider === 'cerebras') addCerebras()
   }
 
   if (!providers.length) {
@@ -727,7 +852,8 @@ async function callAI(
         `[CareerAI] Trying AI provider: ${provider.name}`,
       )
 
-      return await callWithRetry(provider.call)
+      const response = await callWithRetry(provider.call)
+      return normalizeResponse ? normalizeResponse(response, provider.name) : response
     } catch (error) {
       lastError = error
 
@@ -744,13 +870,14 @@ async function callAI(
     }
   }
 
-  throw lastError instanceof Error
+  throw lastError instanceof AIProviderError
     ? lastError
     : new AIProviderError(
         'All AI providers failed.',
         'PROVIDER_FAILED',
-        providers[0].name,
+        providers[providers.length - 1]?.name || configuredProvider,
         false,
+        { cause: lastError },
       )
 }
 
@@ -861,12 +988,43 @@ const localInterviewEvaluation = (question: string, answer: string): InterviewEv
   }
 }
 
+const normalizeChatResponse = (response: string, provider: AIProviderName) => {
+  const trimmed = response.trim()
+  if (!trimmed) throw new AIProviderError('The AI provider returned an empty response.', 'PROVIDER_FAILED', provider, false)
+  const unfenced = trimmed.replace(/^```(?:json|text)?\s*/i, '').replace(/\s*```$/i, '').trim()
+  if (!unfenced.startsWith('{') && !unfenced.startsWith('[')) return trimmed
+  try {
+    const parsed: unknown = JSON.parse(unfenced)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Structured response must be an object.')
+    return JSON.stringify(parsed)
+  } catch (error) {
+    throw new AIProviderError('The AI provider returned malformed structured output.', 'PROVIDER_FAILED', provider, false, { cause: error })
+  }
+}
+
+const careerAnalysisSchema = z.object({
+  career_summary: z.string().min(1),
+  strengths: z.array(z.object({ skill: z.string().min(1), reason: z.string() })),
+  skill_gaps: z.array(z.object({ skill: z.string().min(1), current_level: scoreSchema, target_level: scoreSchema, priority: z.enum(['High', 'Medium', 'Low']), reason: z.string() })),
+  recommended_skills: z.array(z.object({ skill: z.string().min(1), reason: z.string() })),
+  learning_strategy: z.array(z.object({ step: z.number().int().positive(), title: z.string().min(1), description: z.string() })),
+  recommended_roles: z.array(z.object({ role: z.string().min(1), match_percentage: scoreSchema, reason: z.string() })),
+  interview_preparation: z.array(z.object({ topic: z.string().min(1), questions: z.array(z.string()) })),
+})
+
+const normalizeCareerAnalysisResponse = (response: string, provider: AIProviderName) => {
+  try {
+    return JSON.stringify(careerAnalysisSchema.parse(parseJsonResponse(response)))
+  } catch (error) {
+    throw new AIProviderError('The AI provider returned an invalid career analysis.', 'PROVIDER_FAILED', provider, false, { cause: error })
+  }
+}
+
 export const aiService = {
   async chat(message: string, context: unknown, page: string | null): Promise<string> {
     const systemPrompt = `You are CareerAI Copilot, a concise and practical career assistant. Answer using only the supplied authenticated user's CareerAI context. Never invent skills, experience, education, scores, projects, jobs, or achievements. If information is unavailable, say so clearly. Give actionable career guidance in a compact format. The current page is ${page || 'unknown'}. Return plain text only.`
     const userPrompt = `User question:\n${message}\n\nAuthenticated CareerAI context:\n${JSON.stringify(context)}`
-    const response = await callAI(systemPrompt, userPrompt)
-    return response.replace(/^```(?:text)?\s*|\s*```$/gi, '').trim()
+    return callAI(systemPrompt, userPrompt, normalizeChatResponse)
   },
 
   async analyzeSkillGap(input: { targetRole: string; requiredSkills: string[]; preferredSkills: string[]; resumeAnalysis: unknown; profileContext: unknown }): Promise<SkillGapAnalysisResult> {
@@ -1097,6 +1255,7 @@ ${JSON.stringify(resumeAnalysis || null)}
         interview_preparation: Array.isArray(parsed.interview_preparation) ? parsed.interview_preparation : [],
       }
    } catch (error) {
+  if (error instanceof AIProviderError) throw error
   console.error(
     'aiService.analyzeCareer error:',
     error,
