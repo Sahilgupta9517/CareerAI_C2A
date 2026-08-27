@@ -140,20 +140,40 @@ export interface InterviewBatchEvaluationResult {
 
 const scoreSchema = z.number().int().min(0).max(100)
 const textArraySchema = z.array(z.string())
+// Flexible array: accepts strings and objects, coerces objects to string
+const flexibleTextArraySchema = z.array(
+  z.union([
+    z.string(),
+    z.record(z.unknown()).transform((obj) => {
+      // Convert object to a readable string, e.g. {degree: "B.Tech", field: "CSE"} → "B.Tech, CSE"
+      const values = Object.values(obj).filter((v) => typeof v === 'string' && v.trim())
+      return values.length > 0 ? values.join(', ') : JSON.stringify(obj)
+    }),
+  ])
+).default([])
 
 export const ResumeAnalysisResultSchema = z.object({
   overallScore: scoreSchema,
   atsScore: scoreSchema,
   keywordScore: scoreSchema,
   formattingScore: scoreSchema,
-  detectedSkills: textArraySchema.default([]),
-  strengths: textArraySchema.default([]),
-  improvements: textArraySchema.default([]),
-  projects: z.array(z.object({ title: z.string(), outcome: z.string() })).default([]),
-  educationExperience: textArraySchema.default([]),
-  certifications: textArraySchema.default([]),
-  missingSkills: textArraySchema.default([]),
-  atsRecommendations: textArraySchema.default([]),
+  detectedSkills: flexibleTextArraySchema,
+  strengths: flexibleTextArraySchema,
+  improvements: flexibleTextArraySchema,
+  projects: z.array(
+    z.union([
+      z.object({ title: z.string(), outcome: z.string() }),
+      z.string().transform((s) => ({ title: s, outcome: '' })),
+      z.record(z.unknown()).transform((obj) => ({
+        title: typeof obj.title === 'string' ? obj.title : typeof obj.name === 'string' ? obj.name : JSON.stringify(obj),
+        outcome: typeof obj.outcome === 'string' ? obj.outcome : typeof obj.description === 'string' ? obj.description : '',
+      })),
+    ])
+  ).default([]),
+  educationExperience: flexibleTextArraySchema,
+  certifications: flexibleTextArraySchema,
+  missingSkills: flexibleTextArraySchema,
+  atsRecommendations: flexibleTextArraySchema,
   aiSummary: z.string(),
 })
 
@@ -1109,15 +1129,29 @@ Return only the requested JSON structure.
 
     try {
       let responseText = await callAI(systemPrompt, userPrompt)
+      const preprocess = (raw: unknown): unknown => {
+        if (!isRecord(raw)) return raw
+        // Coerce score fields to numbers
+        for (const key of ['overallScore', 'atsScore', 'keywordScore', 'formattingScore'] as const) {
+          if (typeof (raw as Record<string, unknown>)[key] === 'string') {
+            (raw as Record<string, unknown>)[key] = Number((raw as Record<string, unknown>)[key]) || 0
+          }
+        }
+        return raw
+      }
       try {
-        return ResumeAnalysisResultSchema.parse(parseJsonResponse(responseText))
+        return ResumeAnalysisResultSchema.parse(preprocess(parseJsonResponse(responseText)))
       } catch {
-        responseText = await callAI(systemPrompt, `${userPrompt}\nReturn only the JSON object. Repair any formatting and do not include markdown or commentary.`)
-        return ResumeAnalysisResultSchema.parse(parseJsonResponse(responseText))
+        responseText = await callAI(systemPrompt, `${userPrompt}\nReturn only the JSON object. Repair any formatting and do not include markdown or commentary. educationExperience must be an array of strings.`)
+        return ResumeAnalysisResultSchema.parse(preprocess(parseJsonResponse(responseText)))
       }
    } catch (error) {
   console.error('aiService.analyzeResume error:', error)
 
+  // Provide user-friendly error message instead of raw Zod errors
+  if (error instanceof Error && error.message.startsWith('[')) {
+    throw new Error('AI resume analysis returned an unexpected format. Please try again.')
+  }
   throw new Error(
     error instanceof Error
       ? error.message
