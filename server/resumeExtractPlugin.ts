@@ -100,7 +100,7 @@ const careerAnalysisCache = new Map<string, { expiresAt: number; result: CareerA
 const careerAnalysisInflight = new Map<string, Promise<CareerAnalysisResponse>>()
 const careerAnalysisCacheTtlMs = 5 * 60 * 1000
 
-const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
+export const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
   const url = request.url?.split('?')[0] || ''
 
   if (request.method === 'OPTIONS') {
