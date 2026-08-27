@@ -20,7 +20,7 @@ export function Modal({ open, onOpenChange, title, description, children, footer
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-navy-900/70 backdrop-blur-sm data-[state=open]:animate-fade-in" />
         <DialogPrimitive.Content
           className={cn(
-            'fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border bg-card p-6 shadow-glow data-[state=open]:animate-scale-in',
+            'fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border bg-card p-6 shadow-glow data-[state=open]:animate-scale-in',
             className,
           )}
           style={{ borderColor: 'rgba(148,163,184,0.14)' }}
@@ -31,8 +31,8 @@ export function Modal({ open, onOpenChange, title, description, children, footer
               {description}
             </DialogPrimitive.Description>
           ) : null}
-          <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">{children}</div>
-          {footer ? <div className="mt-6 flex shrink-0 justify-end gap-3">{footer}</div> : null}
+          <div className="mt-4 min-h-0 flex-1 overflow-y-auto pb-1">{children}</div>
+          {footer ? <div className="mt-4 flex shrink-0 justify-end gap-3 border-t border-border pt-4">{footer}</div> : null}
           <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
             <X className="h-4 w-4" />
             <span className="sr-only">Close</span>

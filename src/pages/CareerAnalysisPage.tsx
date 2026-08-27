@@ -171,7 +171,7 @@ export function CareerAnalysisPage() {
   }, [])
 
   const generateAnalysis = async () => {
-    if (!data) return
+    if (!data || generating) return
     const targetRole = data.goal?.target_role ?? ''
     if (!targetRole) {
       setErrorMessage('Set a target role before generating a new AI Career Analysis.')
@@ -203,7 +203,9 @@ export function CareerAnalysisPage() {
       setAnalysis(result)
       setLatestCareerAnalysis({ ...result, target_role: targetRole })
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'We could not generate your AI analysis.')
+      setErrorMessage(error instanceof Error && /temporarily unavailable|provider|429|quota|timed out/i.test(error.message)
+        ? 'AI analysis is temporarily unavailable. Please try again in a moment.'
+        : error instanceof Error ? error.message : 'We could not generate your AI analysis.')
     } finally {
       setGenerating(false)
     }

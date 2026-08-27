@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Bookmark, BriefcaseBusiness, Check, ChevronRight, CircleDot, Loader2, MapPin, Search, SlidersHorizontal, Star, Users } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
@@ -79,7 +79,7 @@ export function JobsPage() {
     try {
       const session = await supabase.auth.getSession()
       const token = session.data.session?.access_token
-      const payload = await fetchApi<{ jobs?: ProviderJob[]; liveAvailable?: boolean; hasMore?: boolean; providerStatus?: string }>(`/api/jobs?page=${page}&pageSize=24`, { headers: token ? { Authorization: `Bearer ${token}` } : {} }, 'Job provider')
+      const payload = await fetchApi<{ jobs?: ProviderJob[]; liveAvailable?: boolean; hasMore?: boolean; providerStatus?: string }>(`/api/jobs?page=${page}&pageSize=24${targetRole ? `&query=${encodeURIComponent(targetRole)}` : ''}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} }, 'Job provider')
       const normalized = (payload?.jobs ?? []).map(providerJobToJob)
       if (payload?.liveAvailable && normalized.length) {
         setJobs((current) => append ? [...current, ...normalized.filter((job) => !current.some((existing) => existing.id === job.id))] : normalized)

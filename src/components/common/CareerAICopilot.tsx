@@ -25,6 +25,11 @@ const asRecord = (value: unknown): StructuredResponse | null => value && typeof 
 const asRecords = (value: unknown) => Array.isArray(value) ? value.map(asRecord).filter((item): item is StructuredResponse => item !== null) : []
 const textValue = (value: unknown) => typeof value === 'string' ? value : value === null || value === undefined ? '' : String(value)
 const titleCase = (value: string) => value.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+const readableValue = (value: unknown): string => {
+  if (typeof value !== 'object' || value === null) return textValue(value)
+  if (Array.isArray(value)) return value.map(readableValue).filter(Boolean).join(' - ')
+  return Object.entries(value as StructuredResponse).map(([key, item]) => `${titleCase(key)}: ${readableValue(item)}`).filter(Boolean).join(' · ')
+}
 
 const parseStructuredResponse = (content: string): StructuredResponse | null => {
   const trimmed = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
@@ -67,7 +72,7 @@ function StructuredResponseView({ data }: { data: StructuredResponse }) {
   if (projects.length) return <div className="space-y-3"><p className="text-xs font-semibold uppercase tracking-wider text-cyan-300">AI Insight</p><p className="text-sm">Project ideas to strengthen your profile:</p>{projects.map((item, index) => <StructuredCard key={index} index={index + 1} title={textValue(item.title) || textValue(item.project) || 'Recommended project'} description={textValue(item.description) || textValue(item.reason)} />)}</div>
 
   const sections = Object.entries(data).filter(([key, value]) => key !== 'type' && value !== null && value !== undefined && value !== '')
-  return <div className="space-y-3"><p className="text-xs font-semibold uppercase tracking-wider text-cyan-300">AI Insight</p>{sections.map(([key, value]) => <div key={key}><p className="text-xs font-semibold text-cyan-300">{titleCase(key)}</p>{Array.isArray(value) ? <div className="mt-1 space-y-1 text-sm">{value.map((item, index) => <p key={index}>{typeof item === 'object' && item !== null ? Object.values(item).map(textValue).filter(Boolean).join(' - ') : textValue(item)}</p>)}</div> : <p className="mt-1 text-sm leading-6">{textValue(value)}</p>}</div>)}</div>
+  return <div className="space-y-3"><p className="text-xs font-semibold uppercase tracking-wider text-cyan-300">AI Insight</p>{sections.map(([key, value]) => <div key={key}><p className="text-xs font-semibold text-cyan-300">{titleCase(key)}</p>{Array.isArray(value) ? <div className="mt-1 space-y-1 text-sm">{value.map((item, index) => <p key={index}>{readableValue(item)}</p>)}</div> : <p className="mt-1 text-sm leading-6">{readableValue(value)}</p>}</div>)}</div>
 }
 
 function AssistantResponse({ content }: { content: string }) {
@@ -134,7 +139,7 @@ export function CareerAICopilot({ open, onClose }: { open: boolean; onClose: () 
           {!messages.length ? <div className="rounded-xl border border-primary/15 bg-brand-soft p-4"><div className="flex items-start gap-3"><Bot className="mt-0.5 h-5 w-5 shrink-0 text-cyan-300" /><p className="text-sm leading-6">Hi! I&apos;m CareerAI Copilot. I can help you with your resume, skills, career roadmap, jobs and interview preparation.</p></div></div> : null}
           {!messages.length ? <div className="mt-5 flex flex-wrap gap-2">{quickActions.map((action) => <button key={action.label} type="button" onClick={() => void sendMessage(action.message)} disabled={pending} className="rounded-lg border border-border bg-secondary/70 px-3 py-2 text-left text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:text-primary disabled:opacity-50">{action.label}</button>)}</div> : null}
           <div className="mt-5 space-y-4">{messages.map((message) => <div key={message.id} className={cn('flex min-w-0 gap-2', message.role === 'user' ? 'justify-end' : 'justify-start')}><div className={cn('max-w-[85%] min-w-0 overflow-hidden rounded-2xl px-4 py-3 text-sm leading-6', message.role === 'user' ? 'whitespace-pre-wrap rounded-br-md bg-brand-gradient text-white' : 'rounded-bl-md border border-border bg-secondary text-foreground')}>{message.role === 'user' ? message.content : <AssistantResponse content={message.content} />}</div></div>)}{pending ? <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin text-primary" />Thinking...</div> : null}<div ref={endRef} /></div>
-          {error ? <div role="alert" className="mt-4 rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-xs leading-5 text-rose-300">{error}</div> : null}
+          {error ? <div role="alert" className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-xs leading-5 text-rose-300"><span>{error}</span><button type="button" className="shrink-0 font-semibold text-rose-200 underline underline-offset-2 hover:text-white" onClick={() => { const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user'); if (lastUserMessage) void sendMessage(lastUserMessage.content) }}>Retry</button></div> : null}
         </div>
 
         <form className="shrink-0 border-t border-white/10 p-4" onSubmit={(event) => { event.preventDefault(); void sendMessage() }}>

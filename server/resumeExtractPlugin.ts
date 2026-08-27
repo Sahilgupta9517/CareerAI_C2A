@@ -95,6 +95,11 @@ const compactInterviewContext = (context: unknown) => {
   }
 }
 
+type CareerAnalysisResponse = Awaited<ReturnType<typeof aiService.analyzeCareer>>
+const careerAnalysisCache = new Map<string, { expiresAt: number; result: CareerAnalysisResponse }>()
+const careerAnalysisInflight = new Map<string, Promise<CareerAnalysisResponse>>()
+const careerAnalysisCacheTtlMs = 5 * 60 * 1000
+
 const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
   const url = request.url?.split('?')[0] || ''
 
@@ -138,8 +143,32 @@ const handleRequest = async (request: IncomingMessage, response: ServerResponse)
           return
         }
         const requestUrl = new URL(request.url ?? '/api/jobs', 'http://localhost')
+        let query = requestUrl.searchParams.get('query') ?? undefined
+
+        // Auto-fill query from user's target role if no explicit query provided
+        if (!query && authHeader) {
+          try {
+            const client = getSupabaseClient(authHeader)
+            const { data: userData } = await client.auth.getUser()
+            if (userData?.user) {
+              const { data: goal } = await client
+                .from('career_goals')
+                .select('target_role')
+                .eq('profile_id', (await client.from('profiles').select('id').eq('user_id', userData.user.id).limit(1).maybeSingle()).data?.id)
+                .limit(1)
+                .maybeSingle()
+              if (goal?.target_role) {
+                query = goal.target_role
+                console.log(`[JobProvider] Using authenticated target role as query: "${query}"`)
+              }
+            }
+          } catch (roleError) {
+            console.warn('[JobProvider] Could not load target role, searching without query:', roleError instanceof Error ? roleError.message : 'unknown')
+          }
+        }
+
         const result = await provider.search({
-          query: requestUrl.searchParams.get('query') ?? undefined,
+          query,
           location: requestUrl.searchParams.get('location') ?? undefined,
           page: Number(requestUrl.searchParams.get('page') ?? 1),
           pageSize: Number(requestUrl.searchParams.get('pageSize') ?? 24),
@@ -281,13 +310,36 @@ if (url === '/api/career/analyze' && request.method === 'POST') {
     target_role: currentTargetRole,
   }
 
-  const analysis = await aiService.analyzeCareer(
-    frontendProfile,
-    skills,
-    effectiveCareerGoal,
+  const normalizedSkills = Array.isArray(skills)
+    ? skills.map((skill: unknown) => typeof skill === 'object' && skill !== null ? skill : String(skill)).sort((left: unknown, right: unknown) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+    : []
+  const cacheInput = {
+    profileId: profile.id,
+    profile: frontendProfile,
+    skills: normalizedSkills,
+    careerGoal: effectiveCareerGoal,
     preferences,
     resumeAnalysis,
-  )
+  }
+  const cacheKey = createHash('sha256').update(JSON.stringify(cacheInput)).digest('hex')
+  const cached = careerAnalysisCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    json(response, 200, cached.result)
+    return
+  }
+  careerAnalysisCache.delete(cacheKey)
+
+  let analysisPromise = careerAnalysisInflight.get(cacheKey)
+  if (!analysisPromise) {
+    analysisPromise = aiService.analyzeCareer(frontendProfile, normalizedSkills, effectiveCareerGoal, preferences, resumeAnalysis)
+    careerAnalysisInflight.set(cacheKey, analysisPromise)
+  }
+  let analysis: CareerAnalysisResponse
+  try {
+    analysis = await analysisPromise
+  } finally {
+    if (careerAnalysisInflight.get(cacheKey) === analysisPromise) careerAnalysisInflight.delete(cacheKey)
+  }
 
   const { data: inserted, error: insertError } = await supabase
     .from('career_analyses')
@@ -311,14 +363,12 @@ if (url === '/api/career/analyze' && request.method === 'POST') {
       insertError,
     )
 
-    json(response, 502, {
-      ...analysis,
-      dbError: insertError.message,
-    })
+    json(response, 500, { success: false, error: 'AI analysis was generated but could not be saved. Please try again.' })
 
     return
   }
 
+  careerAnalysisCache.set(cacheKey, { expiresAt: Date.now() + careerAnalysisCacheTtlMs, result: inserted })
   json(response, 200, inserted)
   return
 }
@@ -1182,15 +1232,16 @@ if (url === '/api/career/analyze' && request.method === 'POST') {
   } catch (error) {
     console.error('Server router handle error:', error)
     const errorText = error instanceof Error ? error.message : ''
+    const providerFailure = error instanceof AIProviderError || /AI provider|OpenRouter request failed|rate limited|temporarily unavailable|malformed structured output|invalid career analysis/i.test(errorText)
     const status = error instanceof ResumeExtractError
       ? error.status
-      : /AI returned malformed JSON|incomplete analysis|provider/i.test(errorText)
+      : providerFailure
         ? 503
       : !authHeader || (error instanceof Error && /invalid user session|authorization header|missing authenticated/i.test(error.message))
         ? 401
         : 500
     const code = error instanceof ResumeExtractError ? error.code : 'server_error'
-    const message = error instanceof Error ? error.message : 'An error occurred while processing this request.'
+    const message = providerFailure ? 'AI service temporarily unavailable. Please try again shortly.' : error instanceof Error ? error.message : 'An error occurred while processing this request.'
     json(response, status, { error: message, code })
   }
 }
