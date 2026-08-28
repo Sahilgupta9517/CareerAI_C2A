@@ -1,4 +1,4 @@
-import { extractResumePdf, ResumeExtractError } from './extractResumePdf'
+import { extractResumePdf, ResumeExtractError } from './extractResumePdf.js'
 
 const makePdf = (pageStreams: string[]) => {
   const objects: string[] = []
