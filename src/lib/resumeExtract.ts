@@ -57,7 +57,7 @@ const extractViaSupabase = async (file: File) => {
   const { data, error } = await supabase.functions.invoke('resume-extract', { body: formData })
   if (error) {
     const context = (error as { context?: Response }).context
-    if (context) {
+    if (context && typeof context.json === 'function') {
       const payload: unknown = await context.json().catch(() => null)
       throw new Error(errorFromBody(payload, error.message || 'The resume processing service could not complete this request.'))
     }
