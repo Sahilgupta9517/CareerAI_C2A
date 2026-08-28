@@ -105,7 +105,10 @@ export class AIProviderError extends Error {
     retryable: boolean,
     options?: { cause?: unknown },
   ) {
-    super(message, options)
+    super(message)
+    if (options && 'cause' in options) {
+      this.cause = options.cause
+    }
     this.code = code
     this.provider = provider
     this.retryable = retryable
@@ -1419,7 +1422,7 @@ ${JSON.stringify(context, null, 2)}
         console.warn('[Interview AI] Using local question fallback', { providerStatus: status, questionCount: count })
         return { questions: fallbackQuestions, providerStatus: 'local_fallback', fallbackUsed: true }
       }
-      throw new Error(`AI question generation failed: ${error instanceof Error ? error.message : 'provider request failed'}`, { cause: error })
+      throw new Error(`AI question generation failed: ${error instanceof Error ? error.message : 'provider request failed'}`)
     }
   },
 
@@ -1454,7 +1457,7 @@ Previous questions and topics: ${JSON.stringify(input.previousQuestions)}`
       console.error('aiService.generateAdaptiveInterviewQuestion error:', error)
       const fallback = localInterviewQuestions(input.role, input.interviewType, requestedDifficulty, input.context, Math.max(input.previousQuestions.length + 1, 5))
         .find((question) => !previousQuestionKeys.has(question.question.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()))
-      if (!fallback) throw new Error('Adaptive interview question generation failed.', { cause: error })
+      if (!fallback) throw new Error('Adaptive interview question generation failed.')
       return {
         question: { ...fallback, adaptiveReason: score < 70 ? 'Focused on improving the previous weak area.' : score >= 85 ? 'Increased depth after a strong previous answer.' : 'Maintains the current difficulty based on the previous answer.', basedOnPreviousScore: true },
         providerStatus: 'local_fallback',
@@ -1570,6 +1573,6 @@ All numeric scores must be integers from 0 to 100. The answers array must contai
       }
     }
 
-    throw new Error('AI interview evaluation failed after one retry.', { cause: lastError })
+    throw new Error(`AI interview evaluation failed after one retry: ${lastError instanceof Error ? lastError.message : 'Unknown error'}`)
   }
 }

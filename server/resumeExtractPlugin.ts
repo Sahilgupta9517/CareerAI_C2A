@@ -101,7 +101,8 @@ const careerAnalysisInflight = new Map<string, Promise<CareerAnalysisResponse>>(
 const careerAnalysisCacheTtlMs = 5 * 60 * 1000
 
 export const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
-  const url = request.url?.split('?')[0] || ''
+  const rawUrl = request.url?.split('?')[0] || ''
+  const url = rawUrl.startsWith('/api') ? rawUrl : (rawUrl.startsWith('/') ? `/api${rawUrl}` : `/api/${rawUrl}`)
 
   if (request.method === 'OPTIONS') {
     response.statusCode = 204

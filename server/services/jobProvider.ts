@@ -33,7 +33,10 @@ export interface JobProvider {
 export class JobProviderError extends Error {
   readonly status: JobProviderStatus
   constructor(status: JobProviderStatus, message: string, options?: { cause?: unknown }) {
-    super(message, options)
+    super(message)
+    if (options && 'cause' in options) {
+      this.cause = options.cause
+    }
     this.status = status
     this.name = 'JobProviderError'
   }
