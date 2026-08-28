@@ -1,4 +1,4 @@
-import { parseResumeText } from '../src/lib/resumeParser.ts'
+import { parseResumeText } from '../src/lib/resumeParser'
 
 const assert = (condition: unknown, message: string) => {
   if (!condition) throw new Error(message)

@@ -3,11 +3,11 @@ import type { Plugin } from 'vite'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { extractResumePdf, ResumeExtractError } from './extractResumePdf.ts'
-import { aiService, AIProviderError } from './services/aiService.ts'
-import { dbService, getSupabaseClient } from './services/dbService.ts'
-import { createConfiguredJobProvider, JobProviderError } from './services/jobProvider.ts'
-import { buildChatContext } from './services/chatContextService.ts'
+import { extractResumePdf, ResumeExtractError } from './extractResumePdf'
+import { aiService, AIProviderError } from './services/aiService'
+import { dbService, getSupabaseClient } from './services/dbService'
+import { createConfiguredJobProvider, JobProviderError } from './services/jobProvider'
+import { buildChatContext } from './services/chatContextService'
 
 // Load environment variables manually from .env.local and .env
 const loadEnvFiles = () => {

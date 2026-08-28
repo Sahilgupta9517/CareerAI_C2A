@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { resumeExtractPlugin } from './server/resumeExtractPlugin.ts'
+import { resumeExtractPlugin } from './server/resumeExtractPlugin'
 
 export default defineConfig({
   plugins: [react(), resumeExtractPlugin()],

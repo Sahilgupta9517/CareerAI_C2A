@@ -97,6 +97,7 @@ export class AIProviderError extends Error {
   readonly code: 'QUOTA_EXHAUSTED' | 'TEMPORARY_UNAVAILABLE' | 'AUTHENTICATION_FAILED' | 'PROVIDER_FAILED'
   readonly provider: string
   readonly retryable: boolean
+  override readonly cause?: unknown
 
   constructor(
     message: string,

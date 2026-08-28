@@ -32,6 +32,7 @@ export interface JobProvider {
 
 export class JobProviderError extends Error {
   readonly status: JobProviderStatus
+  override readonly cause?: unknown
   constructor(status: JobProviderStatus, message: string, options?: { cause?: unknown }) {
     super(message)
     if (options && 'cause' in options) {
