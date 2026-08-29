@@ -117,7 +117,7 @@ export function SettingsPage() {
           </div>
         </div>
         <div className="mt-6 flex justify-end">
-          {accountError ? <p role="alert" className="mr-auto text-sm text-rose-600">{accountError}</p> : null}
+          {accountError ? <p role="alert" className="mr-auto text-sm text-rose-400">{accountError}</p> : null}
           <Button onClick={() => void saveAccount()} disabled={accountLoading || accountSaving || !account.name.trim() || !account.role}>{accountSaving ? 'Saving...' : 'Save changes'}</Button>
         </div>
       </Card>

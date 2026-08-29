@@ -150,7 +150,7 @@ export function AuthPage({ mode }: AuthPageProps) {
     setResetting(true)
     setErrorMessage('')
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(form.email.trim(), { redirectTo: `${window.location.origin}/login` })
+      const { error } = await supabase.auth.resetPasswordForEmail(form.email.trim(), { redirectTo: `${window.location.origin}/reset-password` })
       if (error) throw error
       toast({ title: 'Reset email sent', description: 'Check your inbox for a password reset link.', tone: 'info' })
     } catch (resetError) {

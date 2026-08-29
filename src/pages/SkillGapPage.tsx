@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ArrowRight, Check, CircleAlert, CircleDot, GraduationCap, Loader2, Target } from 'lucide-react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -10,10 +10,12 @@ import { Select } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/common/PageHeader'
 import { ProgressRing } from '@/components/common/ProgressRing'
+import { WhyAmISeeingThis } from '@/components/common/WhyAmISeeingThis'
 import { supabase } from '@/lib/supabase'
 import { roleRequirements } from '@/data/roleRequirements'
 import { compareRoleSkills, calculateRoleReadiness } from '@/lib/skillMatching'
 import { runSkillGapAnalysis } from '@/lib/skillGapService'
+import { generateSkillGapExplanation } from '@/lib/careerInsightsService'
 import { normalizeSkill } from '@/lib/jobMatching'
 import { sanitizeSkillList } from '@/lib/resumeParser'
 import type { ResumeEducation } from '@/lib/resumeParser'
@@ -21,7 +23,7 @@ import type { SkillComparison, UserSkill } from '@/types/skillGap'
 import type { SkillGapAnalysis } from '@/types/skillGap'
 
 type SavedSkillRow = { skill?: { name?: string | null } | null; skill_id: number; proficiency?: number | null }
-type Filter = 'all' | 'matched' | 'partial' | 'missing'
+type Filter = 'all' | 'critical' | 'high' | 'medium' | 'low' | 'matched' | 'partial' | 'missing'
 const RESUME_SKILLS_KEY = 'careerai.resumeTechnicalSkills'
 
 const mergeSkills = (saved: UserSkill[], resume: string[]): UserSkill[] => {
@@ -40,6 +42,10 @@ const findRole = (title: string) => roleRequirements.find((item) => item.title =
 
 export function SkillGapPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const queryRole = searchParams.get('jobRole') || searchParams.get('role')
+  const querySkill = searchParams.get('skill') || searchParams.get('targetSkill')
+
   const [loading, setLoading] = useState(true)
   const [savingRole, setSavingRole] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
@@ -119,8 +125,11 @@ export function SkillGapPage() {
           const local = JSON.parse(window.localStorage.getItem(RESUME_SKILLS_KEY) ?? '[]')
           if (analyzed && Array.isArray(local)) resumeSkills = sanitizeSkillList([...resumeSkills, ...local])
         } catch { /* local resume cache is optional */ }
-        const role = goalResult.data?.target_role ?? ''
-        setSavedRole(role); setSelectedRole(role); setUserSkills(mergeSkills(saved, resumeSkills))
+        const role = queryRole && findRole(queryRole) ? queryRole : (goalResult.data?.target_role ?? '')
+        setSavedRole(goalResult.data?.target_role ?? '')
+        setSelectedRole(role)
+        setUserSkills(mergeSkills(saved, resumeSkills))
+        if (querySkill) setFilter('missing')
         if (role) {
           const savedAnalysis = await supabase.from('career_analyses').select('skill_gap_analysis').eq('profile_id', profile.id).eq('target_role', role).not('skill_gap_analysis', 'eq', '{}').order('created_at', { ascending: false }).limit(1).maybeSingle()
           if (savedAnalysis.error) throw savedAnalysis.error
@@ -138,7 +147,17 @@ export function SkillGapPage() {
   const role = findRole(selectedRole)
   const comparisons = useMemo(() => role ? compareRoleSkills(role, userSkills) : [], [role, userSkills])
   const readiness = role ? calculateRoleReadiness(role, userSkills) : 0
-  const filtered = comparisons.filter((item) => filter === 'all' || (filter === 'matched' ? item.classification === 'MATCHED' : filter === 'partial' ? item.classification === 'PARTIAL' : item.classification === 'MISSING'))
+  const filtered = comparisons.filter((item) => {
+    if (filter === 'all') return true
+    if (filter === 'matched') return item.classification === 'MATCHED'
+    if (filter === 'partial') return item.classification === 'PARTIAL'
+    if (filter === 'missing') return item.classification === 'MISSING'
+    if (filter === 'critical') return (item.priority === 'High' || item.requirement === 'Required') && item.classification === 'MISSING'
+    if (filter === 'high') return item.priority === 'High'
+    if (filter === 'medium') return item.priority === 'Medium'
+    if (filter === 'low') return item.priority === 'Low' || !item.priority
+    return true
+  })
   const nextSkills = [...comparisons].filter((item) => item.classification !== 'MATCHED').sort((left, right) => priorityValue(right) - priorityValue(left) || right.weight - left.weight).slice(0, 3)
 
   const runAi = async (force = false) => {
@@ -167,18 +186,56 @@ export function SkillGapPage() {
   if (errorMessage) return <div role="alert" className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-6 text-sm text-rose-300">{errorMessage}</div>
 
   return <div className="space-y-6">
-    <PageHeader title="Skill Gap Analysis" description="A deterministic comparison of your current skills against the requirements for your target role." eyebrow={<Badge variant="outline" className="border-primary/20 text-primary"><Target className="h-3.5 w-3.5" /> Role readiness</Badge>} actions={<Button asChild><Link to="/roadmap">Build My Roadmap <ArrowRight className="h-4 w-4" /></Link></Button>} />
+    <PageHeader title="Skill Gap Analysis & Career Impact" description="Deterministic and explainable comparison of your verified skills against industry benchmarks." eyebrow={<Badge variant="outline" className="border-primary/20 text-primary"><Target className="h-3.5 w-3.5" /> Phase 16 Explainable Skills</Badge>} actions={<Button asChild><Link to="/roadmap">Build My Roadmap <ArrowRight className="h-4 w-4" /></Link></Button>} />
     <Card className="p-5"><div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-wider text-primary">Career goal</p><p className="mt-1 text-lg font-semibold">{savedRole || 'No target role set'}</p><p className="mt-1 text-xs text-muted-foreground">Choose a supported role to calculate your gap.</p></div><Select className="sm:max-w-xs" value={selectedRole} onChange={(event) => { void saveTargetRole(event.target.value) }} aria-label="Target role" disabled={savingRole}><option value="">Choose a target role</option>{roleRequirements.map((item) => <option key={item.id} value={item.title}>{item.title}</option>)}</Select></div></Card>
     {!selectedRole ? <EmptyState icon={<Target className="h-8 w-8" />} title="Set a target role to calculate your skill gap." action="Choose a role above or update your profile." /> : null}
-    {selectedRole && !resumeAnalyzed ? <Card className="border-sky-200 bg-sky-50/60 p-5"><p className="text-sm text-sky-900">Resume evidence is not available yet. Your deterministic comparison below uses saved profile skills.</p><Button asChild variant="outline" className="mt-4"><Link to="/resume-analyzer">Analyze Resume</Link></Button></Card> : null}
+    {selectedRole && !resumeAnalyzed ? <Card className="border-cyan-500/20 bg-cyan-500/10 p-5"><p className="text-sm text-cyan-200">Resume evidence is not available yet. Your deterministic comparison below uses saved profile skills.</p><Button asChild variant="outline" className="mt-4"><Link to="/resume-analyzer">Analyze Resume</Link></Button></Card> : null}
     {role ? <>
-      {resumeAnalyzed ? <Card className="border-amber-200/80 bg-amber-50/60 p-5"><p className="text-sm text-amber-900/75">Resume evidence is included in this AI Skill Gap Analysis.</p></Card> : null}
-      <Card className="border-primary/15 bg-card p-5"><div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-wider text-primary">AI Skill Gap Analysis</p><p className="mt-1 text-sm text-muted-foreground">Get personalized explanations, priorities and a learning strategy based on your current skills and target career.</p>{aiCached ? <p className="mt-2 text-xs text-emerald-700">Loaded from your saved analysis.</p> : null}</div><Button onClick={() => void runAi(Boolean(aiAnalysis))} disabled={aiLoading}>{aiLoading ? <><Loader2 className="h-4 w-4 animate-spin" /> Analyzing...</> : aiAnalysis ? 'Regenerate AI Analysis' : 'Run AI Analysis'}</Button></div>{aiError ? <div role="alert" className="mt-4 flex flex-col gap-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700 sm:flex-row sm:items-center sm:justify-between"><span>{aiError}</span><Button size="sm" variant="outline" onClick={() => void runAi()} disabled={aiLoading}>Retry</Button></div> : null}</Card>
+      {resumeAnalyzed ? <Card className="border-amber-500/20 bg-amber-500/10 p-5"><p className="text-sm text-amber-200">Resume evidence is included in this AI Skill Gap Analysis.</p></Card> : null}
+      <Card className="border-primary/15 bg-card p-5"><div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-wider text-primary">AI Skill Gap Analysis</p><p className="mt-1 text-sm text-muted-foreground">Get personalized explanations, priorities and a learning strategy based on your current skills and target career.</p>{aiCached ? <p className="mt-2 text-xs text-emerald-400">Loaded from your saved analysis.</p> : null}</div><Button onClick={() => void runAi(Boolean(aiAnalysis))} disabled={aiLoading}>{aiLoading ? <><Loader2 className="h-4 w-4 animate-spin" /> Analyzing...</> : aiAnalysis ? 'Regenerate AI Analysis' : 'Run AI Analysis'}</Button></div>{aiError ? <div role="alert" className="mt-4 flex flex-col gap-3 rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-300 sm:flex-row sm:items-center sm:justify-between"><span>{aiError}</span><Button size="sm" variant="outline" onClick={() => void runAi()} disabled={aiLoading}>Retry</Button></div> : null}</Card>
       {aiAnalysis ? <AiSkillGapDashboard analysis={aiAnalysis} /> : null}
       <Card className="border-primary/15 bg-brand-soft p-5"><div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-wider text-primary">Overall readiness</p><h2 className="mt-1 text-2xl font-bold">{role.title}</h2><p className="mt-1 text-sm text-muted-foreground">Matched skills count fully; partial skills count at 50%.</p></div><div className="flex items-center gap-4"><ProgressRing value={readiness} size={94} label={`${readiness}%`} /><div className="text-sm"><p className="font-semibold">{comparisons.filter((item) => item.classification === 'MATCHED').length} matched</p><p className="text-muted-foreground">of {role.requiredSkills.length} required skills</p></div></div></div></Card>
       <div className="grid gap-4 sm:grid-cols-3"><SummaryCard label="Skills You Have" value={comparisons.filter((item) => item.classification === 'MATCHED').length} tone="success" /><SummaryCard label="Needs Improvement" value={comparisons.filter((item) => item.classification === 'PARTIAL').length} tone="warning" /><SummaryCard label="Missing Skills" value={comparisons.filter((item) => item.classification === 'MISSING').length} tone="danger" /></div>
-      <Card className="p-5"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-base font-semibold">Recommended Next Skills</h2><p className="mt-1 text-sm text-muted-foreground">The highest-impact next steps, ordered by priority.</p></div><Badge variant="secondary">Top {nextSkills.length}</Badge></div><div className="mt-5 grid gap-3 lg:grid-cols-3">{nextSkills.map((item, index) => <GapCard key={item.skill} item={item} rank={index + 1} />)}{nextSkills.length === 0 ? <p className="text-sm text-muted-foreground">You currently match every configured requirement.</p> : null}</div></Card>
-      <Card className="p-5"><div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div><h2 className="text-base font-semibold">Skill Comparison</h2><p className="mt-1 text-sm text-muted-foreground">Deterministic matching using normalized skill names and saved proficiency.</p></div><div className="flex flex-wrap gap-2">{(['all', 'matched', 'partial', 'missing'] as Filter[]).map((value) => <Button key={value} size="sm" variant={filter === value ? 'default' : 'outline'} onClick={() => setFilter(value)}>{value === 'all' ? 'All' : value === 'matched' ? 'Matched' : value === 'partial' ? 'Needs Improvement' : 'Missing'}</Button>)}</div></div><div className="mt-5 space-y-3">{filtered.map((item) => <DetailedSkillRow key={`${item.requirement}-${item.skill}`} item={item} />)}{filtered.length === 0 ? <p className="py-8 text-center text-sm text-muted-foreground">No skills match this filter.</p> : null}</div></Card>
+      <Card className="p-5"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-base font-semibold">Recommended Next Skills</h2><p className="mt-1 text-sm text-muted-foreground">The highest-impact next steps, ordered by priority.</p></div><Badge variant="secondary">Top {nextSkills.length}</Badge></div><div className="mt-5 grid gap-3 lg:grid-cols-3">{nextSkills.map((item, index) => <GapCard key={item.skill} item={item} rank={index + 1} targetRole={role.title} />)}{nextSkills.length === 0 ? <p className="text-sm text-muted-foreground">You currently match every configured requirement.</p> : null}</div></Card>
+      <Card className="p-5">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-base font-semibold">Skill Comparison & Career Impact</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Deterministic matching using normalized skill names, proficiency levels, and market weights.</p>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {(['all', 'critical', 'high', 'medium', 'low', 'matched', 'partial', 'missing'] as Filter[]).map((value) => (
+              <Button
+                key={value}
+                size="sm"
+                variant={filter === value ? 'default' : 'outline'}
+                className="text-xs h-7 px-2.5 capitalize"
+                onClick={() => setFilter(value)}
+              >
+                {value === 'all' ? 'All Skills' : value === 'critical' ? '🔴 Critical' : value === 'high' ? '🟠 High' : value === 'medium' ? '🟡 Medium' : value === 'low' ? '🟢 Low' : value === 'partial' ? 'Needs Improvement' : value}
+              </Button>
+            ))}
+          </div>
+        </div>
+        <div className="mt-5 space-y-3">
+          {filtered.map((item) => (
+            <DetailedSkillRow key={`${item.requirement}-${item.skill}`} item={item} targetRole={role.title} />
+          ))}
+          {filtered.length === 0 ? <p className="py-8 text-center text-sm text-muted-foreground">No skills match the selected filter.</p> : null}
+        </div>
+
+        <div className="mt-5 pt-4 border-t border-border/60">
+          <WhyAmISeeingThis
+            title="Why am I seeing these skill gap ratings?"
+            targetRole={role.title}
+            confidence="HIGH"
+            confidenceReason="Evaluated by matching your verified profile & resume skills against standardized industry benchmarks."
+            matchingFactors={comparisons.filter(c => c.classification === 'MATCHED').map(c => `${c.skill} verified (${c.proficiency ?? 100}%)`)}
+            missingFactors={comparisons.filter(c => c.classification === 'MISSING').map(c => `${c.skill} missing (${c.requirement} requirement)`)}
+            reason={`For a ${role.title}, mastery in core required competencies directly dictates technical screening pass rates.`}
+          />
+        </div>
+      </Card>
       <div className="grid gap-5 lg:grid-cols-2"><Card className="p-5"><div className="flex items-center gap-3"><GraduationCap className="h-5 w-5 text-primary" /><div><h2 className="text-base font-semibold">Skills You Have</h2><p className="mt-1 text-sm text-muted-foreground">Evidence from your analyzed resume and saved profile skills.</p></div></div><div className="mt-5 flex flex-wrap gap-2">{userSkills.map((skill) => <Badge key={skill.name} variant="secondary"><Check className="h-3 w-3" />{skill.name}{skill.proficiency !== undefined ? ` ${skill.proficiency}%` : ''}</Badge>)}</div></Card><Card className="p-5"><div className="flex items-center gap-3"><CircleAlert className="h-5 w-5 text-amber-700" /><div><h2 className="text-base font-semibold">Learning Order</h2><p className="mt-1 text-sm text-muted-foreground">Start with high-priority required gaps, then build preferred skills.</p></div></div><ol className="mt-5 space-y-3">{nextSkills.map((item, index) => <li key={item.skill} className="flex gap-3 text-sm"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-white">{index + 1}</span><span><b>{item.skill}</b><span className="ml-2 text-xs text-muted-foreground">{item.estimatedDifficulty}</span><span className="mt-1 block text-xs text-muted-foreground">{item.learningAction}</span></span></li>)}</ol></Card></div>
       <Card className="p-5"><div className="flex items-center gap-3"><GraduationCap className="h-5 w-5 text-primary" /><div><h2 className="text-base font-semibold">Education</h2><p className="mt-1 text-sm text-muted-foreground">Academic information kept separate from technical skills.</p></div></div><div className="mt-5 grid gap-3 sm:grid-cols-2">{education.map((item, index) => <div key={`${item.institution}-${index}`} className="rounded-lg border border-border p-4"><p className="text-sm font-semibold">{item.degree}</p><p className="mt-1 text-sm text-muted-foreground">{item.institution}</p>{item.year ? <p className="mt-2 text-xs text-muted-foreground">Graduation: {item.year}</p> : null}{item.score ? <p className="text-xs text-muted-foreground">Score: {item.score}</p> : null}</div>)}{education.length === 0 ? <p className="text-sm text-muted-foreground">No education records were extracted.</p> : null}</div></Card>
     </> : null}
@@ -200,7 +257,77 @@ function AiSkillGapDashboard({ analysis }: { analysis: SkillGapAnalysis }) {
     <div className="grid gap-5 lg:grid-cols-2"><Card className="p-5"><h2 className="text-base font-semibold">Current skills</h2><div className="mt-4 flex flex-wrap gap-2">{current.map((item) => <Badge key={`${item.skill}-${item.category}`} variant="secondary">{item.skill} {item.current_level}%</Badge>)}{current.length === 0 ? <p className="text-sm text-muted-foreground">No current skills identified.</p> : null}</div></Card><Card className="p-5"><h2 className="text-base font-semibold">Learning focus</h2><ol className="mt-4 space-y-2">{sequence.map((item) => <li key={`${item.step}-${item.title}`} className="flex gap-3 text-sm"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-white">{item.step}</span><span><b>{item.title}</b><span className="mt-1 block text-muted-foreground">{item.description}</span></span></li>)}{sequence.length === 0 ? <li className="text-sm text-muted-foreground">No learning sequence available.</li> : null}</ol></Card></div>
   </div>
 }
-function SummaryCard({ label, value, tone }: { label: string; value: number; tone: 'success' | 'warning' | 'danger' }) { return <Card className="p-4"><p className="text-xs text-muted-foreground">{label}</p><p className={`mt-1 text-2xl font-bold ${tone === 'success' ? 'text-emerald-700' : tone === 'warning' ? 'text-amber-700' : 'text-rose-700'}`}>{value}</p></Card> }
+function SummaryCard({ label, value, tone }: { label: string; value: number; tone: 'success' | 'warning' | 'danger' }) { return <Card className="p-4"><p className="text-xs text-muted-foreground">{label}</p><p className={`mt-1 text-2xl font-bold ${tone === 'success' ? 'text-emerald-400' : tone === 'warning' ? 'text-amber-400' : 'text-rose-400'}`}>{value}</p></Card> }
 function EmptyState({ icon, title, action }: { icon: ReactNode; title: string; action: string }) { return <Card className="p-8 text-center"><span className="mx-auto flex w-fit text-muted-foreground">{icon}</span><h2 className="mt-3 text-base font-semibold">{title}</h2><p className="mt-1 text-sm text-muted-foreground">{action}</p></Card> }
-function GapCard({ item, rank }: { item: SkillComparison; rank: number }) { return <div className="rounded-lg border border-border p-4"><div className="flex items-start justify-between gap-2"><span className="text-sm font-semibold">{rank}. {item.skill}</span><Badge variant={item.priority === 'High' ? 'danger' : item.priority === 'Medium' ? 'warning' : 'secondary'}>{item.priority} Priority</Badge></div><p className="mt-2 text-xs text-muted-foreground">{item.reason}</p><p className="mt-3 text-xs font-medium">{item.estimatedDifficulty} learning difficulty</p></div> }
-function DetailedSkillRow({ item }: { item: SkillComparison }) { const color = item.classification === 'MATCHED' ? 'success' : item.classification === 'PARTIAL' ? 'warning' : 'danger'; const value = item.proficiency ?? (item.classification === 'MATCHED' ? 100 : 0); return <div className="rounded-lg border border-border p-4"><div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div className="flex items-start gap-3"><span className={`mt-0.5 ${item.classification === 'MATCHED' ? 'text-emerald-600' : item.classification === 'PARTIAL' ? 'text-amber-600' : 'text-rose-600'}`}>{item.classification === 'MATCHED' ? <Check className="h-5 w-5" /> : item.classification === 'PARTIAL' ? <CircleDot className="h-5 w-5" /> : <CircleAlert className="h-5 w-5" />}</span><div><p className="text-sm font-semibold">{item.skill}</p><p className="mt-1 text-xs text-muted-foreground">{item.requirement} requirement - {item.reason}</p></div></div><div className="flex items-center gap-2"><Badge variant={color}>{item.classification}</Badge>{item.priority ? <Badge variant="outline">{item.priority}</Badge> : null}</div></div><div className="mt-3 flex items-center gap-3"><Progress value={value} className="h-2" /><span className="w-12 text-right text-xs font-semibold">{item.classification === 'MISSING' ? '0%' : `${value}%`}</span></div>{item.classification !== 'MATCHED' ? <p className="mt-3 text-xs text-muted-foreground"><span className="font-semibold text-foreground">Recommended action:</span> {item.learningAction} <span className="ml-1">({item.estimatedDifficulty})</span></p> : null}</div> }
+
+function GapCard({ item, rank, targetRole }: { item: SkillComparison; rank: number; targetRole: string }) {
+  const explanation = generateSkillGapExplanation(item.skill, item.proficiency ?? 0, item.requirement, targetRole)
+  return (
+    <div className="rounded-lg border border-border p-4 bg-muted/10">
+      <div className="flex items-start justify-between gap-2">
+        <span className="text-sm font-semibold">{rank}. {item.skill}</span>
+        <Badge variant={explanation.priority === 'CRITICAL' ? 'danger' : explanation.priority === 'HIGH' ? 'warning' : 'secondary'}>
+          {explanation.priority}
+        </Badge>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">{explanation.whyItMatters}</p>
+      <p className="mt-2 text-[11px] text-amber-400 font-medium">Impact: {explanation.careerImpact}</p>
+      <p className="mt-2 text-xs font-medium text-foreground">Action: {explanation.recommendedAction}</p>
+    </div>
+  )
+}
+
+function DetailedSkillRow({ item, targetRole }: { item: SkillComparison; targetRole: string }) {
+  const color = item.classification === 'MATCHED' ? 'success' : item.classification === 'PARTIAL' ? 'warning' : 'danger'
+  const value = item.proficiency ?? (item.classification === 'MATCHED' ? 100 : 0)
+  const explanation = generateSkillGapExplanation(item.skill, value, item.requirement, targetRole)
+
+  return (
+    <div className="rounded-xl border border-border/80 bg-muted/10 p-4 transition-all hover:border-primary/30">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="flex items-start gap-3">
+          <span className={`mt-0.5 ${item.classification === 'MATCHED' ? 'text-emerald-400' : item.classification === 'PARTIAL' ? 'text-amber-400' : 'text-rose-400'}`}>
+            {item.classification === 'MATCHED' ? <Check className="h-5 w-5" /> : item.classification === 'PARTIAL' ? <CircleDot className="h-5 w-5" /> : <CircleAlert className="h-5 w-5" />}
+          </span>
+          <div>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-bold text-foreground">{item.skill}</p>
+              <Badge variant="outline" className="text-[10px]">{item.requirement}</Badge>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+              <span className="font-semibold text-foreground/90">Why it matters: </span>
+              {explanation.whyItMatters}
+            </p>
+            <p className="mt-0.5 text-[11px] text-primary font-medium">
+              Market Impact: {explanation.careerImpact}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <Badge variant={color}>{item.classification}</Badge>
+          <Badge variant={explanation.priority === 'CRITICAL' ? 'danger' : explanation.priority === 'HIGH' ? 'warning' : 'secondary'}>
+            {explanation.priority} Priority
+          </Badge>
+        </div>
+      </div>
+
+      <div className="mt-3 flex items-center gap-3">
+        <span className="text-[11px] font-semibold text-muted-foreground w-16">Current: {explanation.currentLevel}%</span>
+        <Progress value={value} className="h-2 flex-1" />
+        <span className="text-[11px] font-semibold text-primary w-16 text-right">Target: {explanation.targetLevel}%</span>
+      </div>
+
+      {item.classification !== 'MATCHED' && (
+        <div className="mt-3 flex items-center justify-between border-t border-border/50 pt-2 text-xs">
+          <p className="text-muted-foreground">
+            <span className="font-semibold text-foreground">Recommended action: </span>
+            {explanation.recommendedAction}
+          </p>
+          <Badge variant="outline" className="text-[10px] shrink-0">
+            {item.estimatedDifficulty} difficulty
+          </Badge>
+        </div>
+      )}
+    </div>
+  )
+}

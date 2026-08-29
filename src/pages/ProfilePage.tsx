@@ -57,7 +57,7 @@ export function ProfilePage() {
   const removeProject = async (id: number, name: string) => { if (!window.confirm(`Remove ${name} from your profile?`)) return; try { await deleteProject(id); await refresh(); toast({ title: 'Project removed', tone: 'info' }) } catch (projectError) { toast({ title: 'Could not remove project', description: projectError instanceof Error ? projectError.message : 'Please try again.', tone: 'error' }) } }
 
   if (loading) return <div className="space-y-5"><Skeleton className="h-44 w-full" /><div className="grid gap-5 lg:grid-cols-2"><Skeleton className="h-72" /><Skeleton className="h-72" /></div></div>
-  if (error || !data || !strength) return <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700">{error || 'Profile data is not available.'}</div>
+  if (error || !data || !strength) return <div role="alert" className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-6 text-sm text-rose-300">{error || 'Profile data is not available.'}</div>
 
   const displayName = data.profile.name || 'Your profile'
   const initials = displayName.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'U'

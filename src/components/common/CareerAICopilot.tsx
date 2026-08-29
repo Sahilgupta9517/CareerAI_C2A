@@ -10,11 +10,14 @@ import { cn } from '@/lib/utils'
 type ChatMessage = { id: number; role: 'user' | 'assistant'; content: string }
 
 const quickActions = [
+  { label: 'What should I do today?', message: 'What should I do today to improve my career readiness?' },
+  { label: 'What should I focus on this week?', message: 'What should I focus on this week based on my skill gaps?' },
+  { label: 'Am I job ready?', message: 'Am I ready for my target role jobs right now?' },
+  { label: 'Build my 30-day plan', message: 'Build me a structured 30-day career plan.' },
+  { label: 'Which jobs should I prioritize?', message: 'Which job openings should I prioritize applying to?' },
   { label: 'Improve my Resume', message: 'How can I improve my resume for my target role?' },
   { label: 'Explain my Skill Gap', message: 'Explain my biggest skill gaps and what I should learn next.' },
-  { label: 'Build my Learning Plan', message: 'Build a practical learning plan for my target role.' },
   { label: 'Prepare for Interview', message: 'Help me prepare for an interview for my target role.' },
-  { label: 'Analyze my Career Progress', message: 'Analyze my current career progress and give me the next best step.' },
 ]
 
 const pageName = (pathname: string) => pathname.replace(/^\//, '').replace(/\//g, '-') || 'dashboard'
@@ -91,6 +94,15 @@ export function CareerAICopilot({ open, onClose }: { open: boolean; onClose: () 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, pending])
+
+  useEffect(() => {
+    if (!open) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [open, onClose])
 
   const sendMessage = async (value = draft) => {
     const message = value.trim()

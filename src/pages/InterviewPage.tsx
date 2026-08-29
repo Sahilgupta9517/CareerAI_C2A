@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { PageHeader } from '@/components/common/PageHeader'
 import InterviewPageEnhanced from './InterviewPageEnhanced'
 import InterviewDashboard from './InterviewDashboard'
@@ -7,9 +7,22 @@ import type { InterviewSetup } from '@/lib/interviewWorkflow'
 
 export function InterviewPage() {
   const location = useLocation()
-  const interviewId = location.pathname.match(/^\/interview\/(\d+)$/)?.[1]
-  const [screen, setScreen] = useState<'dashboard' | 'interview'>(interviewId ? 'interview' : 'dashboard')
-  const [setupOverride, setSetupOverride] = useState<Partial<InterviewSetup> | null>(null)
+  const [searchParams] = useSearchParams()
+  const jobRole = searchParams.get('jobRole') || searchParams.get('role')
+  const interviewId = location.pathname.match(/^\/(?:interview|interviews)\/(\d+)$/)?.[1]
+  const [screen, setScreen] = useState<'dashboard' | 'interview'>(
+    interviewId || jobRole ? 'interview' : 'dashboard'
+  )
+  const [setupOverride, setSetupOverride] = useState<Partial<InterviewSetup> | null>(
+    jobRole ? { targetRole: jobRole } : null
+  )
+
+  useEffect(() => {
+    if (jobRole) {
+      setSetupOverride({ targetRole: jobRole })
+      setScreen('interview')
+    }
+  }, [jobRole])
 
   const handleStartNewInterview = (setup: Partial<InterviewSetup>) => {
     setSetupOverride(setup)

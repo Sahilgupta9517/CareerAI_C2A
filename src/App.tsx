@@ -14,6 +14,9 @@ import { ProgressPage } from '@/pages/ProgressPage'
 import { ProfilePage } from '@/pages/ProfilePage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { CareerAnalysisPage } from '@/pages/CareerAnalysisPage'
+import { CareerAnalyticsPage } from '@/pages/CareerAnalyticsPage'
+import { ResetPasswordPage } from '@/pages/ResetPasswordPage'
+import { AdminDashboardPage } from '@/pages/AdminDashboardPage'
 import { useAuth } from '@/context/AuthContext'
 
 function ProtectedRoutes() {
@@ -40,6 +43,7 @@ export default function App() {
       <Route path="/landing" element={<LandingPage />} />
       <Route path="/login" element={<AuthPage mode="login" />} />
       <Route path="/signup" element={<AuthPage mode="signup" />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route element={<ProtectedRoutes />}>
         <Route path="/onboarding" element={<OnboardingPage />} />
         <Route path="/dashboard" element={<DashboardPage />} />
@@ -47,13 +51,17 @@ export default function App() {
         <Route path="/resume-analyzer" element={<ResumeAnalyzerPage />} />
         <Route path="/skills" element={<SkillGapPage />} />
         <Route path="/career-analysis" element={<CareerAnalysisPage />} />
+        <Route path="/analytics" element={<CareerAnalyticsPage />} />
         <Route path="/roadmap" element={<RoadmapPage />} />
         <Route path="/jobs" element={<JobsPage />} />
         <Route path="/interview" element={<InterviewPage />} />
         <Route path="/interview/:interviewId" element={<InterviewPage />} />
+        <Route path="/interviews" element={<InterviewPage />} />
+        <Route path="/interviews/:interviewId" element={<InterviewPage />} />
         <Route path="/progress" element={<ProgressPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/admin" element={<AdminDashboardPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

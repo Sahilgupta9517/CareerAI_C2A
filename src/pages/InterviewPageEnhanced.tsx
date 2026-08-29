@@ -129,6 +129,8 @@ function InterviewSetupScreen({
               <option value="System Design">System Design</option>
               <option value="Project-Based">Project-Based</option>
               <option value="Mixed">Mixed (All Types)</option>
+              <option value="Resume-based" disabled={!personalization?.resume}>Interview Me From My Resume {!personalization?.resume ? '(Requires Resume)' : ''}</option>
+              <option value="Skill-gap" disabled={!personalization?.skillGaps}>Practice My Skill Gaps {!personalization?.skillGaps ? '(No Gaps Detected)' : ''}</option>
             </Select>
           </div>
 
@@ -493,7 +495,16 @@ function InterviewReportScreen({ report, onNewInterview }: { report: InterviewRe
                   {question.questionSource ? <Badge className="mt-2" variant="outline">Source: {question.questionSource}</Badge> : null}
                   <p className="mt-3 text-sm text-muted-foreground"><strong>Your answer:</strong> {question.user_answer || 'No answer submitted.'}</p>
                   {feedbackText ? <p className="mt-2 text-sm"><strong>AI feedback:</strong> {feedbackText}</p> : null}
-                  {question.expected_answer ? <p className="mt-2 text-sm text-muted-foreground"><strong>Ideal answer:</strong> {question.expected_answer}</p> : null}
+                  {question.expected_answer ? (
+                    <details className="mt-3 group border border-blue-100 rounded-md overflow-hidden">
+                      <summary className="bg-blue-50/50 px-3 py-2 text-sm font-medium text-blue-900 cursor-pointer hover:bg-blue-50 transition-colors select-none">
+                        Show Model Answer
+                      </summary>
+                      <div className="p-3 bg-white text-sm text-slate-700 border-t border-blue-100 leading-relaxed">
+                        {question.expected_answer}
+                      </div>
+                    </details>
+                  ) : null}
                   {improvements.length > 0 ? <p className="mt-2 text-sm text-blue-800"><strong>How to improve:</strong> {improvements.join(' ')}</p> : null}
                 </div>
               )

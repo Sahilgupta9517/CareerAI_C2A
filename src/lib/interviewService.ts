@@ -3,7 +3,7 @@ import { supabase } from './supabase'
 import { sanitizeSkillList } from './resumeParser'
 import type { ParsedResume } from './resumeParser'
 
-export type InterviewType = 'Technical' | 'HR' | 'Behavioral' | 'Mixed' | 'Role-specific'
+export type InterviewType = 'Technical' | 'HR' | 'Behavioral' | 'Mixed' | 'Role-specific' | 'Resume-based' | 'Skill-gap'
 export type InterviewDifficulty = 'Easy' | 'Medium' | 'Hard' | 'Expert'
 
 export type InterviewQuestion = {

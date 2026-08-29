@@ -9,6 +9,7 @@ import { useToast } from '@/components/common/Toast'
 import { getInterviewHistory, deleteInterview, type InterviewSetup } from '@/lib/interviewWorkflow'
 import { getCurrentProfile } from '@/lib/persistenceService'
 import type { MockInterview } from '@/lib/interviewService'
+import { supabase } from '@/lib/supabase'
 
 interface DashboardStats {
   totalInterviews: number
@@ -18,6 +19,13 @@ interface DashboardStats {
   currentTargetRole: string | null
   scoreProgress: Array<{ date: string; score: number }>
   topicsPerformed: Map<string, number>
+  readiness: {
+    overall: number | null
+    technical: number | null
+    behavioral: number | null
+    communication: number | null
+    role: number | null
+  }
 }
 
 export function InterviewDashboard({ onStartNewInterview }: { onStartNewInterview: (setup: Partial<InterviewSetup>) => void }) {
@@ -32,6 +40,13 @@ export function InterviewDashboard({ onStartNewInterview }: { onStartNewIntervie
     currentTargetRole: null,
     scoreProgress: [],
     topicsPerformed: new Map(),
+    readiness: {
+      overall: null,
+      technical: null,
+      behavioral: null,
+      communication: null,
+      role: null,
+    }
   })
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<'all' | 'completed' | 'in-progress'>('all')
@@ -41,10 +56,12 @@ export function InterviewDashboard({ onStartNewInterview }: { onStartNewIntervie
     const loadData = async () => {
       setLoading(true)
       try {
-        const [profile, interviews] = await Promise.all([
-          getCurrentProfile(),
+        const profile = await getCurrentProfile()
+        const [interviews, roleRes] = await Promise.all([
           getInterviewHistory(),
+          supabase.from('career_goals').select('target_role').eq('profile_id', profile.id).maybeSingle()
         ])
+        const targetRole = roleRes.data?.target_role || null
 
         setHistory(interviews)
 
@@ -80,14 +97,27 @@ export function InterviewDashboard({ onStartNewInterview }: { onStartNewIntervie
           ])
         )
 
+        const avg = (arr: number[]) => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null
+        const techScores = completed.filter(i => i.technical_score !== null).map(i => i.technical_score as number)
+        const commScores = completed.filter(i => i.communication_score !== null).map(i => i.communication_score as number)
+        const behavInterviews = completed.filter(i => i.interview_type === 'Behavioral' && i.overall_score !== null).map(i => i.overall_score as number)
+        const currentRoleInterviews = completed.filter(i => i.target_role === targetRole && i.overall_score !== null).map(i => i.overall_score as number)
+
         setStats({
           totalInterviews: interviews.length,
           completedInterviews: completed.length,
           averageScore: avgScore,
           bestScore,
-          currentTargetRole: profile.name || null,
+          currentTargetRole: targetRole,
           scoreProgress,
           topicsPerformed,
+          readiness: {
+            overall: avgScore || null,
+            technical: avg(techScores),
+            behavioral: avg(behavInterviews),
+            communication: avg(commScores),
+            role: avg(currentRoleInterviews)
+          }
         })
       } catch (error) {
         toast({
@@ -170,6 +200,55 @@ export function InterviewDashboard({ onStartNewInterview }: { onStartNewIntervie
       {/* Summary Stats */}
       {history.length > 0 && (
         <>
+          {/* Interview Readiness Card */}
+          <Card className="p-6 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 border-slate-700 relative overflow-hidden">
+            <div className="absolute top-0 right-0 p-16 bg-blue-500/10 rounded-full blur-3xl" />
+            <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+              <div className="flex-1">
+                <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
+                  <Target className="w-6 h-6 text-blue-400" />
+                  Interview Readiness
+                </h3>
+                <p className="text-slate-400 text-sm mb-6">
+                  Based on your mock interview history and performance.
+                </p>
+                {stats.readiness.overall === null ? (
+                  <div className="bg-slate-800/50 border border-slate-700/50 rounded-lg p-4">
+                    <p className="text-slate-300">Complete an interview session to generate your readiness score.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
+                      <p className="text-sm text-slate-400 font-medium mb-1">Technical</p>
+                      <p className={`text-2xl font-bold ${getScoreColor(stats.readiness.technical || 0)}`}>{stats.readiness.technical || 0}%</p>
+                    </div>
+                    <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
+                      <p className="text-sm text-slate-400 font-medium mb-1">Behavioral</p>
+                      <p className={`text-2xl font-bold ${getScoreColor(stats.readiness.behavioral || 0)}`}>{stats.readiness.behavioral || 0}%</p>
+                    </div>
+                    <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
+                      <p className="text-sm text-slate-400 font-medium mb-1">Communication</p>
+                      <p className={`text-2xl font-bold ${getScoreColor(stats.readiness.communication || 0)}`}>{stats.readiness.communication || 0}%</p>
+                    </div>
+                    <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
+                      <p className="text-sm text-slate-400 font-medium mb-1">Role Fit</p>
+                      <p className={`text-2xl font-bold ${getScoreColor(stats.readiness.role || 0)}`}>{stats.readiness.role || 0}%</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              {stats.readiness.overall !== null && (
+                <div className="flex-shrink-0 flex flex-col items-center justify-center bg-slate-800/80 rounded-full w-32 h-32 border-4 border-slate-700/50 relative">
+                  <span className={`text-4xl font-bold ${getScoreColor(stats.readiness.overall)}`}>
+                    {stats.readiness.overall}%
+                  </span>
+                  <span className="text-xs text-slate-400 mt-1 uppercase tracking-wider font-semibold">Overall</span>
+                </div>
+              )}
+            </div>
+          </Card>
+
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <Card className="p-4">
               <div className="flex items-center justify-between">

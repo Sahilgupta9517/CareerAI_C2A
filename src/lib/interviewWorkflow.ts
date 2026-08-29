@@ -4,7 +4,7 @@ import { loadInterviewContext, type MockInterview, type MockInterviewQuestion, t
 
 export interface InterviewSetup {
   targetRole: string
-  interviewType: 'Technical' | 'Behavioral' | 'HR' | 'Coding' | 'System Design' | 'Project-Based' | 'Mixed'
+  interviewType: 'Technical' | 'Behavioral' | 'HR' | 'Coding' | 'System Design' | 'Project-Based' | 'Mixed' | 'Resume-based' | 'Skill-gap'
   difficulty: 'Beginner' | 'Intermediate' | 'Advanced' | 'Expert'
   questionCount: 5 | 10 | 15 | 20
   durationMinutes: 5 | 10 | 15 | 20 | 30

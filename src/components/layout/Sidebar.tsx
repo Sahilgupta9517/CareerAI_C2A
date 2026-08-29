@@ -9,8 +9,10 @@ import {
   Map,
   MessagesSquare,
   Settings,
+  ShieldCheck,
   Sparkles,
   Target,
+  TrendingUp,
   User,
   X,
 } from 'lucide-react'
@@ -35,6 +37,7 @@ const navGroups = [
       { label: 'Skill Gap', to: '/skills', icon: Target },
       { label: 'Career Roadmap', to: '/roadmap', icon: Map },
       { label: 'Interviews', to: '/interview', icon: MessagesSquare },
+      { label: 'Analytics', to: '/analytics', icon: TrendingUp },
       { label: 'Progress', to: '/progress', icon: LineChart },
     ],
   },
@@ -43,6 +46,7 @@ const navGroups = [
     items: [
       { label: 'Profile', to: '/profile', icon: User },
       { label: 'Settings', to: '/settings', icon: Settings },
+      { label: 'Admin Console', to: '/admin', icon: ShieldCheck },
     ],
   },
 ]

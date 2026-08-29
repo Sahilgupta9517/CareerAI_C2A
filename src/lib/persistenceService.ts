@@ -5,6 +5,9 @@
 
 import { supabase } from './supabase'
 import { sanitizeSkillList } from './resumeParser'
+import type { CareerJobApplication, JobApplicationEvent, ApplicationAnalytics } from '@/types/jobs'
+
+export type { CareerJobApplication, JobApplicationEvent, ApplicationAnalytics }
 
 export type JobMatchingErrorKind = 'AUTH' | 'PROFILE' | 'CAREER_GOAL' | 'SKILLS' | 'RESUME' | 'AI_ANALYSIS' | 'SAVED_JOBS' | 'APPLICATION' | 'APPLICATION_QUERY' | 'APPLICATION_INSERT' | 'APPLICATION_UPDATE' | 'INTERVIEW' | 'EVALUATION' | 'COMPLETION' | 'HISTORY' | 'DETAILS' | 'DELETE'
 
@@ -18,7 +21,7 @@ export class JobMatchingError extends Error {
   }
 }
 
-export type ApplicationStatus = 'saved' | 'applied' | 'assessment' | 'interview' | 'rejected' | 'offer'
+export type ApplicationStatus = 'saved' | 'applied' | 'screening' | 'interview' | 'assessment' | 'offer' | 'rejected'
 
 export interface SavedJob {
   id: number
@@ -62,6 +65,21 @@ export interface CareerAnalysis {
   interview_preparation: Array<{ topic: string; questions: string[] }>
   created_at: string
   updated_at: string
+}
+
+export interface JobAnalysisRecord {
+  id: number
+  profile_id?: number
+  job_title: string
+  company: string
+  job_description: string
+  extracted_skills: string[]
+  extracted_responsibilities: string[]
+  match_score: number
+  analysis_type: 'jd_analysis' | 'resume_comparison'
+  result: Record<string, unknown>
+  created_at: string
+  updated_at?: string
 }
 
 const applicationFailureMessage = (error: { code?: string; message?: string }) => {
@@ -395,3 +413,428 @@ async function loadUserSkills(profileId: number): Promise<string[]> {
 function logJobMatchingError(kind: JobMatchingErrorKind, error: unknown) {
   if (import.meta.env.DEV) console.error(`[JobMatching] ${kind} load failed:`, error)
 }
+
+const LOCAL_JOB_ANALYSES_KEY = 'careerai_local_job_analyses'
+
+export async function saveJobAnalysis(
+  profileId: number,
+  analysis: Omit<JobAnalysisRecord, 'id' | 'created_at' | 'updated_at' | 'profile_id'>
+): Promise<JobAnalysisRecord> {
+  const newRecord: JobAnalysisRecord = {
+    id: Date.now(),
+    profile_id: profileId,
+    ...analysis,
+    created_at: new Date().toISOString(),
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('job_analyses')
+      .insert({
+        profile_id: profileId,
+        job_title: analysis.job_title,
+        company: analysis.company,
+        job_description: analysis.job_description,
+        extracted_skills: analysis.extracted_skills,
+        extracted_responsibilities: analysis.extracted_responsibilities,
+        match_score: analysis.match_score,
+        analysis_type: analysis.analysis_type,
+        result: analysis.result,
+      })
+      .select()
+      .single()
+
+    if (error) throw error
+    if (data) return data as JobAnalysisRecord
+  } catch (error) {
+    if (import.meta.env.DEV) console.warn('[JobMatching] DB save failed, saving to local offline storage:', error)
+  }
+
+  // Fallback to local storage
+  try {
+    const existing: JobAnalysisRecord[] = JSON.parse(localStorage.getItem(LOCAL_JOB_ANALYSES_KEY) || '[]')
+    const updated = [newRecord, ...existing.filter((item) => item.id !== newRecord.id)].slice(0, 30)
+    localStorage.setItem(LOCAL_JOB_ANALYSES_KEY, JSON.stringify(updated))
+  } catch {
+    // Ignore storage quota errors
+  }
+
+  return newRecord
+}
+
+export async function getJobAnalyses(profileId: number): Promise<JobAnalysisRecord[]> {
+  let dbAnalyses: JobAnalysisRecord[] = []
+  try {
+    const { data, error } = await supabase
+      .from('job_analyses')
+      .select('*')
+      .eq('profile_id', profileId)
+      .order('created_at', { ascending: false })
+      .limit(30)
+
+    if (!error && data) {
+      dbAnalyses = data as JobAnalysisRecord[]
+    }
+  } catch (error) {
+    if (import.meta.env.DEV) console.warn('[JobMatching] Could not fetch job_analyses from DB:', error)
+  }
+
+  try {
+    const localAnalyses: JobAnalysisRecord[] = JSON.parse(localStorage.getItem(LOCAL_JOB_ANALYSES_KEY) || '[]')
+    const combined = [...dbAnalyses]
+    localAnalyses.forEach((local) => {
+      if (!combined.some((item) => item.job_title === local.job_title && item.analysis_type === local.analysis_type)) {
+        combined.push(local)
+      }
+    })
+    return combined.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  } catch {
+    return dbAnalyses
+  }
+}
+
+export async function deleteJobAnalysis(profileId: number, analysisId: number): Promise<void> {
+  try {
+    await supabase.from('job_analyses').delete().eq('id', analysisId).eq('profile_id', profileId)
+  } catch {
+    // Ignore
+  }
+
+  try {
+    const existing: JobAnalysisRecord[] = JSON.parse(localStorage.getItem(LOCAL_JOB_ANALYSES_KEY) || '[]')
+    const updated = existing.filter((item) => item.id !== analysisId)
+    localStorage.setItem(LOCAL_JOB_ANALYSES_KEY, JSON.stringify(updated))
+  } catch {
+    // Ignore
+  }
+}
+
+const LOCAL_CAREER_APPS_KEY = 'careerai_career_job_applications'
+const LOCAL_APP_EVENTS_KEY = 'careerai_job_application_events'
+
+export async function createCareerApplication(
+  profileId: number,
+  appData: Partial<CareerJobApplication>
+): Promise<CareerJobApplication> {
+  const companyName = (appData.company_name || 'Target Employer').trim()
+  const jobTitle = (appData.job_title || 'Position').trim()
+  const now = new Date().toISOString()
+
+  // Deterministic duplicate check in existing applications
+  const existingApps = await getCareerApplications(profileId)
+  const duplicate = existingApps.find(
+    (app) =>
+      (app.company_name.toLowerCase() === companyName.toLowerCase() &&
+        app.job_title.toLowerCase() === jobTitle.toLowerCase()) ||
+      (appData.job_url && app.job_url && app.job_url.trim().toLowerCase() === appData.job_url.trim().toLowerCase())
+  )
+
+  if (duplicate) {
+    throw new JobMatchingError('APPLICATION_INSERT', `An application for "${jobTitle}" at "${companyName}" is already being tracked.`)
+  }
+
+  const payload = {
+    profile_id: profileId,
+    company_name: companyName,
+    job_title: jobTitle,
+    job_url: appData.job_url || '',
+    location: appData.location || 'Remote',
+    employment_type: appData.employment_type || 'Full-time',
+    salary_text: appData.salary_text || '',
+    description: appData.description || '',
+    source: appData.source || 'Manual',
+    status: appData.status || 'saved',
+    priority: appData.priority || 'MEDIUM',
+    applied_at: appData.status === 'applied' ? now : appData.applied_at || null,
+    interview_at: appData.interview_at || null,
+    notes: appData.notes || '',
+    recruiter_notes: appData.recruiter_notes || '',
+    follow_up_at: appData.follow_up_at || null,
+    updated_at: now,
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('career_job_applications')
+      .insert(payload)
+      .select()
+      .single()
+
+    if (!error && data) {
+      const createdApp = data as CareerJobApplication
+      void addApplicationEvent(profileId, createdApp.id, 'created', `Tracked ${jobTitle} at ${companyName}`)
+      return createdApp
+    }
+  } catch (error) {
+    if (import.meta.env.DEV) console.warn('[ApplicationTracker] DB insert failed, writing to local storage:', error)
+  }
+
+  // Local storage fallback
+  const fallbackRecord: CareerJobApplication = {
+    id: Date.now(),
+    ...payload,
+    created_at: now,
+    updated_at: now,
+  }
+
+  try {
+    const local: CareerJobApplication[] = JSON.parse(localStorage.getItem(LOCAL_CAREER_APPS_KEY) || '[]')
+    localStorage.setItem(LOCAL_CAREER_APPS_KEY, JSON.stringify([fallbackRecord, ...local]))
+    void addApplicationEvent(profileId, fallbackRecord.id, 'created', `Tracked ${jobTitle} at ${companyName}`)
+  } catch {
+    // Ignore quota limits
+  }
+
+  return fallbackRecord
+}
+
+export async function getCareerApplications(profileId: number): Promise<CareerJobApplication[]> {
+  let dbApps: CareerJobApplication[] = []
+  try {
+    const { data, error } = await supabase
+      .from('career_job_applications')
+      .select('*')
+      .eq('profile_id', profileId)
+      .order('updated_at', { ascending: false })
+
+    if (!error && data) {
+      dbApps = data as CareerJobApplication[]
+    }
+  } catch (error) {
+    if (import.meta.env.DEV) console.warn('[ApplicationTracker] DB fetch error:', error)
+  }
+
+  try {
+    const localApps: CareerJobApplication[] = JSON.parse(localStorage.getItem(LOCAL_CAREER_APPS_KEY) || '[]')
+    const combined = [...dbApps]
+    localApps.forEach((local) => {
+      if (!combined.some((item) => item.id === local.id || (item.company_name === local.company_name && item.job_title === local.job_title))) {
+        combined.push(local)
+      }
+    })
+    return combined.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+  } catch {
+    return dbApps
+  }
+}
+
+export async function updateCareerApplication(
+  profileId: number,
+  id: number,
+  updates: Partial<CareerJobApplication>
+): Promise<CareerJobApplication> {
+  const now = new Date().toISOString()
+  const payload = { ...updates, updated_at: now }
+
+  if (updates.status === 'applied' && !updates.applied_at) {
+    payload.applied_at = now
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('career_job_applications')
+      .update(payload)
+      .eq('id', id)
+      .eq('profile_id', profileId)
+      .select()
+      .single()
+
+    if (!error && data) {
+      const updated = data as CareerJobApplication
+      if (updates.status) {
+        void addApplicationEvent(profileId, id, 'status_change', `Status changed to ${updates.status.toUpperCase()}`)
+      }
+      if (updates.notes) {
+        void addApplicationEvent(profileId, id, 'note', `Updated application notes`)
+      }
+      if (updates.follow_up_at) {
+        void addApplicationEvent(profileId, id, 'follow_up', `Scheduled follow-up for ${new Date(updates.follow_up_at).toLocaleDateString()}`)
+      }
+      return updated
+    }
+  } catch (error) {
+    if (import.meta.env.DEV) console.warn('[ApplicationTracker] DB update error:', error)
+  }
+
+  // Fallback local update
+  const local: CareerJobApplication[] = JSON.parse(localStorage.getItem(LOCAL_CAREER_APPS_KEY) || '[]')
+  const index = local.findIndex((item) => item.id === id)
+  if (index !== -1) {
+    const updated = { ...local[index], ...payload, updated_at: now } as CareerJobApplication
+    local[index] = updated
+    localStorage.setItem(LOCAL_CAREER_APPS_KEY, JSON.stringify(local))
+    if (updates.status) {
+      void addApplicationEvent(profileId, id, 'status_change', `Status changed to ${updates.status.toUpperCase()}`)
+    }
+    if (updates.notes) {
+      void addApplicationEvent(profileId, id, 'note', `Updated application notes`)
+    }
+    if (updates.follow_up_at) {
+      void addApplicationEvent(profileId, id, 'follow_up', `Scheduled follow-up for ${new Date(updates.follow_up_at).toLocaleDateString()}`)
+    }
+    return updated
+  }
+
+  throw new JobMatchingError('APPLICATION_UPDATE', 'Application record not found.')
+}
+
+export async function deleteCareerApplication(profileId: number, id: number): Promise<void> {
+  try {
+    await supabase.from('career_job_applications').delete().eq('id', id).eq('profile_id', profileId)
+  } catch {
+    // Ignore DB delete error
+  }
+
+  try {
+    const local: CareerJobApplication[] = JSON.parse(localStorage.getItem(LOCAL_CAREER_APPS_KEY) || '[]')
+    const updated = local.filter((item) => item.id !== id)
+    localStorage.setItem(LOCAL_CAREER_APPS_KEY, JSON.stringify(updated))
+  } catch {
+    // Ignore local error
+  }
+}
+
+export async function addApplicationEvent(
+  profileId: number,
+  appId: number,
+  eventType: string,
+  note?: string
+): Promise<JobApplicationEvent> {
+  const event: JobApplicationEvent = {
+    id: Date.now(),
+    application_id: appId,
+    profile_id: profileId,
+    event_type: eventType as any,
+    note: note || '',
+    created_at: new Date().toISOString(),
+  }
+
+  try {
+    const { data } = await supabase
+      .from('job_application_events')
+      .insert({
+        application_id: appId,
+        profile_id: profileId,
+        event_type: eventType,
+        note: note || '',
+      })
+      .select()
+      .single()
+    if (data) return data as JobApplicationEvent
+  } catch {
+    // Fallback to local storage
+  }
+
+  try {
+    const events: JobApplicationEvent[] = JSON.parse(localStorage.getItem(LOCAL_APP_EVENTS_KEY) || '[]')
+    localStorage.setItem(LOCAL_APP_EVENTS_KEY, JSON.stringify([event, ...events]))
+  } catch {
+    // Ignore quota
+  }
+
+  return event
+}
+
+export async function getApplicationEvents(_profileId: number, appId: number): Promise<JobApplicationEvent[]> {
+  let dbEvents: JobApplicationEvent[] = []
+  try {
+    const { data } = await supabase
+      .from('job_application_events')
+      .select('*')
+      .eq('application_id', appId)
+      .order('created_at', { ascending: false })
+    if (data) dbEvents = data as JobApplicationEvent[]
+  } catch {
+    // Ignore
+  }
+
+  try {
+    const localEvents: JobApplicationEvent[] = JSON.parse(localStorage.getItem(LOCAL_APP_EVENTS_KEY) || '[]')
+    const filtered = localEvents.filter((item) => item.application_id === appId)
+    const combined = [...dbEvents]
+    filtered.forEach((f) => {
+      if (!combined.some((item) => item.id === f.id)) combined.push(f)
+    })
+    return combined.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  } catch {
+    return dbEvents
+  }
+}
+
+export function getCareerApplicationAnalytics(applications: CareerJobApplication[]): ApplicationAnalytics {
+  const total = applications.length
+  const byStatus: Record<string, number> = {
+    interested: 0,
+    saved: 0,
+    applied: 0,
+    screening: 0,
+    interview: 0,
+    technical_round: 0,
+    final_round: 0,
+    offer: 0,
+    rejected: 0,
+    withdrawn: 0,
+  }
+  const byRole: Record<string, number> = {}
+  const bySource: Record<string, number> = {}
+
+  let activeCount = 0
+  let interviewsCount = 0
+  let offersCount = 0
+
+  const nowMs = Date.now()
+  const weekMs = 7 * 24 * 60 * 60 * 1000
+  const monthMs = 30 * 24 * 60 * 60 * 1000
+
+  let weeklyCount = 0
+  let monthlyCount = 0
+
+  let totalDaysToInterview = 0
+  let interviewCountWithDates = 0
+
+  applications.forEach((app) => {
+    byStatus[app.status] = (byStatus[app.status] || 0) + 1
+    byRole[app.job_title] = (byRole[app.job_title] || 0) + 1
+    bySource[app.source || 'Manual'] = (bySource[app.source || 'Manual'] || 0) + 1
+
+    if (['applied', 'screening', 'interview', 'technical_round', 'final_round'].includes(app.status)) activeCount++
+    if (['screening', 'interview', 'technical_round', 'final_round'].includes(app.status)) interviewsCount++
+    if (app.status === 'offer') offersCount++
+
+    if (app.applied_at && (app.interview_at || app.status === 'interview' || app.status === 'technical_round' || app.status === 'final_round')) {
+      const appTime = new Date(app.applied_at).getTime()
+      const intTime = new Date(app.interview_at || app.updated_at).getTime()
+      if (intTime >= appTime) {
+        totalDaysToInterview += (intTime - appTime) / (1000 * 60 * 60 * 24)
+        interviewCountWithDates++
+      }
+    }
+
+    const appTime = new Date(app.created_at).getTime()
+    if (nowMs - appTime <= weekMs) weeklyCount++
+    if (nowMs - appTime <= monthMs) monthlyCount++
+  })
+
+  const responseRatePct = total > 0 ? Math.round(((byStatus.screening + byStatus.interview + byStatus.technical_round + byStatus.final_round + byStatus.offer + byStatus.rejected) / total) * 100) : 0
+  const interviewRatePct = total > 0 ? Math.round(((byStatus.screening + byStatus.interview + byStatus.technical_round + byStatus.final_round + byStatus.offer) / total) * 100) : 0
+  const offerRatePct = total > 0 ? Math.round((byStatus.offer / total) * 100) : 0
+  const avgDaysToInterview = interviewCountWithDates > 0 ? Math.round(totalDaysToInterview / interviewCountWithDates) : undefined
+
+  return {
+    total,
+    activeCount,
+    interviewsCount,
+    offersCount,
+    responseRatePct,
+    interviewRatePct,
+    offerRatePct,
+    byStatus,
+    byRole,
+    bySource,
+    weeklyCount,
+    monthlyCount,
+    avgDaysToInterview,
+  }
+}
+
+

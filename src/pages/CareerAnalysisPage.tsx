@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowRight, BriefcaseBusiness, CheckCircle2, Loader2, MessageSquareText, Sparkles, Target } from 'lucide-react'
+import { ArrowRight, BriefcaseBusiness, CheckCircle2, Loader2, MessageSquareText, Sparkles, Target, Zap } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { PageHeader } from '@/components/common/PageHeader'
+import { ProgressRing } from '@/components/common/ProgressRing'
+import { WhyAmISeeingThis } from '@/components/common/WhyAmISeeingThis'
 import { supabase } from '@/lib/supabase'
 import { fetchApi } from '@/lib/apiClient'
+import type { CareerIntelligenceData, CareerIntelligenceResponse } from '@/types/careerIntelligence'
 
 type ResumeContext = {
   overall_score: number | null
@@ -81,6 +84,7 @@ export function CareerAnalysisPage() {
   const navigate = useNavigate()
   const [data, setData] = useState<UserData | null>(null)
   const [analysis, setAnalysis] = useState<AiAnalysis | null>(null)
+  const [intelligence, setIntelligence] = useState<CareerIntelligenceData | null>(null)
   const [latestCareerAnalysis, setLatestCareerAnalysis] = useState<Record<string, unknown> | null>(null)
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
@@ -136,6 +140,22 @@ export function CareerAnalysisPage() {
     }
   }
 
+  const loadIntelligence = async () => {
+    try {
+      const sessionRes = await supabase.auth.getSession()
+      const token = sessionRes.data.session?.access_token
+      if (!token) return
+      const res = await fetchApi<CareerIntelligenceResponse>(
+        '/api/career/intelligence',
+        { headers: { Authorization: `Bearer ${token}` } },
+        'Career intelligence'
+      )
+      if (res.data) setIntelligence(res.data)
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn('Could not load career intelligence for summary:', e)
+    }
+  }
+
   useEffect(() => {
     const init = async () => {
       try {
@@ -143,6 +163,7 @@ export function CareerAnalysisPage() {
         if (!userData) return
 
         setData(userData)
+        void loadIntelligence()
         const currentTargetRole = userData.goal?.target_role ?? ''
         const { data: latestAnalysisData, error: latestAnalysisError } = await supabase
           .from('career_analyses')
@@ -221,8 +242,122 @@ export function CareerAnalysisPage() {
 
   return <div className="space-y-6">
     <PageHeader title="AI Career Analysis" description={targetRole ? `Generate a structured analysis for your ${targetRole} path.` : 'Complete your career goal before generating an analysis.'} eyebrow={<Badge variant="outline" className="border-primary/20 text-primary"><Sparkles className="h-3.5 w-3.5" /> Secure AI analysis</Badge>} actions={<div className="flex gap-2"><Button onClick={generateAnalysis} disabled={generating || !targetRole}>{generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {analysis ? 'Regenerate Analysis' : 'Generate AI Analysis'}</Button><Button asChild variant="outline"><Link to="/skills">View skill gaps <ArrowRight className="h-4 w-4" /></Link></Button></div>} />
-    {errorMessage ? <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{errorMessage}</div> : null}
-    {roleChangedMessage ? <div role="status" className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{roleChangedMessage}</div> : null}
+    {errorMessage ? <div role="alert" className="rounded-2xl border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-300">{errorMessage}</div> : null}
+    {roleChangedMessage ? <div role="status" className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-300">{roleChangedMessage}</div> : null}
+
+    {/* Career Intelligence Summary */}
+    {intelligence && (
+      <Card className="border-primary/25 bg-gradient-to-br from-primary/10 via-card to-background p-6 shadow-glow">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex items-start gap-5">
+            <div className="shrink-0">
+              <ProgressRing value={intelligence.careerReadinessScore} size={110} label={`${intelligence.careerReadinessScore}%`} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="border-primary/40 bg-primary/15 text-primary">
+                  <Zap className="mr-1 h-3 w-3" /> Career Intelligence Engine
+                </Badge>
+                <Badge variant={intelligence.confidenceIndicator === 'High' ? 'secondary' : intelligence.confidenceIndicator === 'Medium' ? 'warning' : 'outline'} className="text-[10px]">
+                  {intelligence.confidenceIndicator} Confidence
+                </Badge>
+              </div>
+              <h2 className="mt-2 text-xl font-bold text-foreground">
+                Career Readiness: {intelligence.careerReadinessScore}% Ready
+              </h2>
+              <p className="mt-1 max-w-xl text-xs text-muted-foreground leading-relaxed">
+                {intelligence.scoreExplanation}
+              </p>
+
+              <div className="mt-4 flex flex-wrap gap-4 text-xs">
+                <div>
+                  <span className="font-semibold text-emerald-400">Strongest Area:</span>{' '}
+                  <span className="text-muted-foreground">{intelligence.strongestArea}</span>
+                </div>
+                <div>
+                  <span className="font-semibold text-amber-400">Growth Focus:</span>{' '}
+                  <span className="text-muted-foreground">{intelligence.weakestArea}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:w-[380px]">
+            <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5 text-center">
+              <p className="text-[10px] uppercase text-muted-foreground font-medium">Profile (10%)</p>
+              <p className="mt-0.5 text-sm font-bold text-foreground">{intelligence.breakdown.profileCompleteness}%</p>
+            </div>
+            <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5 text-center">
+              <p className="text-[10px] uppercase text-muted-foreground font-medium">Skills (25%)</p>
+              <p className="mt-0.5 text-sm font-bold text-primary">{intelligence.breakdown.skillAlignment}%</p>
+            </div>
+            <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5 text-center">
+              <p className="text-[10px] uppercase text-muted-foreground font-medium">Resume (20%)</p>
+              <p className="mt-0.5 text-sm font-bold text-foreground">{intelligence.breakdown.resumeStrength}%</p>
+            </div>
+            <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5 text-center">
+              <p className="text-[10px] uppercase text-muted-foreground font-medium">Projects (15%)</p>
+              <p className="mt-0.5 text-sm font-bold text-foreground">{intelligence.breakdown.projectExperience}%</p>
+            </div>
+            <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5 text-center">
+              <p className="text-[10px] uppercase text-muted-foreground font-medium">Goal Fit (15%)</p>
+              <p className="mt-0.5 text-sm font-bold text-foreground">{intelligence.breakdown.targetRoleAlignment}%</p>
+            </div>
+            <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5 text-center">
+              <p className="text-[10px] uppercase text-muted-foreground font-medium">Interviews (5%)</p>
+              <p className="mt-0.5 text-sm font-bold text-foreground">{intelligence.breakdown.interviewReadiness}%</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Actionable Next Steps from Intelligence Engine */}
+        {intelligence.recommendedActions.length > 0 && (
+          <div className="mt-5 border-t border-border/70 pt-4">
+            <p className="text-xs font-semibold uppercase tracking-wider text-cyan-400">Personalized Next Actions</p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {intelligence.recommendedActions.slice(0, 3).map((act, idx) => (
+                <div key={idx} className="flex flex-col justify-between rounded-lg border border-border/60 bg-muted/15 p-3 text-xs">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <Badge variant={act.priority === 'HIGH' ? 'danger' : 'warning'} className="text-[10px]">
+                        {act.priority}
+                      </Badge>
+                      <span className="text-[10px] text-muted-foreground uppercase">{act.relatedModule}</span>
+                    </div>
+                    <p className="mt-2 font-semibold text-foreground">{act.title}</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground leading-normal">{act.reason}</p>
+                  </div>
+                  <Button asChild size="sm" variant="outline" className="mt-3 text-xs h-7">
+                    <Link to={act.ctaLink}>
+                      {act.ctaText} <ArrowRight className="ml-1 h-3 w-3" />
+                    </Link>
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-5 pt-4 border-t border-border/70">
+          <WhyAmISeeingThis
+            title="Why am I seeing this analysis & readiness score?"
+            targetRole={targetRole || undefined}
+            confidence={intelligence.confidenceIndicator.toUpperCase() as any}
+            confidenceReason="Analysis generated from verified database skills, resume evaluation, and target role criteria."
+            matchingFactors={[
+              `Strongest performance in ${intelligence.strongestArea}`,
+              `${intelligence.breakdown.skillAlignment}% verified skill alignment`,
+              `${intelligence.breakdown.resumeStrength}% resume & ATS strength`,
+            ]}
+            missingFactors={[
+              `Growth focus needed in ${intelligence.weakestArea}`,
+              'Continue completing high-priority action recommendations',
+            ]}
+            reason={intelligence.scoreExplanation}
+          />
+        </div>
+      </Card>
+    )}
 
     <Card className="relative overflow-hidden p-6"><div className="pointer-events-none absolute -right-16 -top-16 h-44 w-44 rounded-full bg-brand-gradient opacity-10 blur-3xl" /><div className="relative grid gap-6 lg:grid-cols-[1fr_auto] lg:items-center"><div><p className="text-xs font-semibold uppercase tracking-wider text-primary">Career Overview</p><h2 className="mt-2 text-2xl font-bold">{show(data.profile.name)} · {show(targetRole)}</h2><p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">{analysis?.career_summary || 'Your AI-generated summary will appear here after you generate the analysis.'}</p><div className="mt-4 flex flex-wrap gap-2"><Badge variant="secondary">{show(data.profile.education)}</Badge><Badge variant="secondary">{show(data.profile.experience)}</Badge><Badge variant="secondary">{show(data.profile.location)}</Badge></div></div><div className="min-w-44 rounded-2xl bg-brand-soft p-5 text-center"><p className="text-xs text-muted-foreground">Current skill average</p><p className="mt-1 text-4xl font-bold text-primary">{skillAverage}%</p><Progress value={skillAverage} className="mt-3" /></div></div></Card>
 
